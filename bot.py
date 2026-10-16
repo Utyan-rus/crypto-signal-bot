@@ -25,17 +25,26 @@ Usage in Telegram:
 
 import logging
 import os
+import threading
 
 from dotenv import load_dotenv
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from exchange import ExchangeClient
 from analysis import analyze
+import webapp
 
 # chat_id -> {"symbol": str, "timeframe": str, "min_confidence": int}
 WATCHLIST: dict[int, dict] = {}
 CHECK_INTERVAL_SECONDS = 15 * 60  # how often /watch re-checks each pair
+
+# Assets shown in the /panel Mini App, and how often their cache refreshes
+PANEL_SYMBOLS = [s.strip().upper() for s in os.getenv(
+    "PANEL_SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT"
+).split(",") if s.strip()]
+PANEL_TIMEFRAME = os.getenv("PANEL_TIMEFRAME", "1h")
+PANEL_REFRESH_SECONDS = 5 * 60
 
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -58,8 +67,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/analyze BTC/USDT [таймфрейм] — разовый анализ\n"
         "/watch BTC/USDT [таймфрейм] — буду сам писать, когда появится сильный сигнал\n"
         "/unwatch BTC/USDT — остановить слежение за парой\n"
-        "/mywatches — список того, что отслеживается\n\n"
+        "/mywatches — список того, что отслеживается\n"
+        "/panel — открыть панель со списком активов (LONG/SHORT/NEUTRAL)\n\n"
         "Я не торгую за тебя и не имею доступа к твоему кошельку."
+    )
+
+
+async def panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    public_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN") or os.getenv("PANEL_PUBLIC_DOMAIN")
+    panel_url = os.getenv("PANEL_URL") or (f"https://{public_domain}" if public_domain else None)
+
+    if not panel_url:
+        await update.message.reply_text(
+            "Панель ещё не настроена: у сервиса нет публичного домена. "
+            "Сгенерируй домен на Railway и задай переменную PANEL_URL или RAILWAY_PUBLIC_DOMAIN."
+        )
+        return
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Открыть панель", web_app=WebAppInfo(url=panel_url))]
+    ])
+    await update.message.reply_text(
+        f"Список активов и расклад Long/Short/Neutral, обновляется каждые "
+        f"{PANEL_REFRESH_SECONDS // 60} мин.",
+        reply_markup=keyboard,
     )
 
 
@@ -124,6 +155,32 @@ async def check_watchlist(context: ContextTypes.DEFAULT_TYPE):
             log.exception(f"Watch check failed for chat {chat_id} ({w['symbol']})")
 
 
+async def refresh_panel_cache(context: ContextTypes.DEFAULT_TYPE):
+    """Periodically recomputes signals for PANEL_SYMBOLS and stores them for the Mini App."""
+    for symbol in PANEL_SYMBOLS:
+        try:
+            df = client.fetch_ohlcv(symbol, timeframe=PANEL_TIMEFRAME, limit=200)
+            if len(df) < 60:
+                continue
+            imbalance = client.fetch_order_book_imbalance(symbol)
+            funding = client.fetch_funding_rate(symbol)
+            signal = analyze(df, order_book_imbalance=imbalance, funding_rate=funding)
+
+            webapp.SIGNALS_CACHE[symbol] = {
+                "symbol": symbol,
+                "timeframe": PANEL_TIMEFRAME,
+                "direction": signal.direction,
+                "confidence": signal.confidence,
+                "risk_level": signal.risk_level,
+                "entry": round(signal.entry, 4),
+                "stop_loss": round(signal.stop_loss, 4),
+                "take_profit": round(signal.take_profit, 4),
+                "reasons": signal.reasons,
+            }
+        except Exception:
+            log.exception(f"Panel refresh failed for {symbol}")
+
+
 async def analyze_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Укажи пару, например: /analyze BTC/USDT")
@@ -179,11 +236,14 @@ def main():
     app.add_handler(CommandHandler("watch", watch_cmd))
     app.add_handler(CommandHandler("unwatch", unwatch_cmd))
     app.add_handler(CommandHandler("mywatches", mywatches_cmd))
+    app.add_handler(CommandHandler("panel", panel_cmd))
 
     if app.job_queue:
         app.job_queue.run_repeating(check_watchlist, interval=CHECK_INTERVAL_SECONDS, first=30)
+        app.job_queue.run_repeating(refresh_panel_cache, interval=PANEL_REFRESH_SECONDS, first=5)
 
-    log.info("Bot started")
+    threading.Thread(target=webapp.run, daemon=True).start()
+    log.info("Bot started, webapp thread launched")
     app.run_polling()
 
 
