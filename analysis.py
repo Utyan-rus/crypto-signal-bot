@@ -173,3 +173,37 @@ def analyze(df: pd.DataFrame, order_book_imbalance: float = 0.0,
         take_profit=take_profit,
         atr_value=atr_val,
     )
+
+
+def backtest(df: pd.DataFrame, lookback: int = 60, horizon: int = 24) -> dict:
+    """
+    Retrospective check: walks a rolling window through the given candles,
+    recomputes this same rule-based signal at each point using only data
+    available up to that point, then checks whether price moved in the
+    signal's direction `horizon` candles later.
+
+    This is purely a statistic over historical data with these exact
+    rules — not a prediction, and no guarantee future performance will
+    look similar.
+    """
+    results = {"LONG": {"count": 0, "wins": 0}, "SHORT": {"count": 0, "wins": 0}}
+    close = df["close"]
+    n = len(df)
+
+    for i in range(lookback, n - horizon):
+        window = df.iloc[: i + 1]
+        sig = analyze(window)
+        if sig.direction == "NEUTRAL":
+            continue
+
+        entry_price = close.iloc[i]
+        future_price = close.iloc[i + horizon]
+
+        bucket = results[sig.direction]
+        bucket["count"] += 1
+        if sig.direction == "LONG" and future_price > entry_price:
+            bucket["wins"] += 1
+        elif sig.direction == "SHORT" and future_price < entry_price:
+            bucket["wins"] += 1
+
+    return results

@@ -36,6 +36,11 @@ class ExchangeClient:
         except Exception:
             return None
 
+    def fetch_last_price(self, symbol: str) -> float:
+        """Last traded price for a symbol — used for price alerts."""
+        ticker = self.exchange.fetch_ticker(symbol)
+        return ticker["last"]
+
     def fetch_order_book_imbalance(self, symbol: str, depth: int = 50) -> float:
         """
         Simple bid/ask volume imbalance in the order book.
