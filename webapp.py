@@ -220,13 +220,69 @@ PANEL_HTML = """<!DOCTYPE html>
     color: var(--hint); cursor: pointer;
   }
   .strategy-pill.active { background: var(--button); color: var(--button-text); }
+ 
+  :root { --bg: #080d18; --text: #eef3ff; --hint: #8b98b6; --link: #7c9cff; --button: #637bff; --button-text: #ffffff; --secondary-bg: #121b2d; }
+  body { background: radial-gradient(ellipse at 10% -10%, rgba(78,103,255,.22), transparent 38%), #080d18; color: var(--text); font-size: 14px; }
+  header { padding: 22px 18px 18px; border: 0; background: linear-gradient(180deg, rgba(17,27,48,.96), rgba(8,13,24,.15)); }
+  .brandline { display:flex; align-items:center; gap:12px; margin-bottom:18px; }
+  .brandmark { display:grid; place-items:center; width:42px; height:42px; border-radius:14px; font-size:21px; font-weight:900; color:#fff; background:linear-gradient(135deg,#6d85ff,#43d6c5); box-shadow:0 8px 28px rgba(89,119,255,.25); }
+  .brandtitle { font-size:18px; letter-spacing:1.5px; font-weight:900; }
+  .brandtitle span { color:#7d91ff; }
+  .sub { margin-top:3px; color:#91a0bf; }
+  .strategy-pill { display:flex; align-items:center; justify-content:center; gap:8px; padding:10px 12px; border:1px solid rgba(116,142,255,.25); border-radius:12px; background:rgba(80,104,220,.13); color:#b8c4ff; font-size:11px; letter-spacing:1px; font-weight:800; }
+  .paper-tag { border-radius:5px; padding:3px 6px; background:rgba(70,220,173,.13); color:#61e6bc; font-size:10px; letter-spacing:.7px; }
+  .pulse-dot { width:7px; height:7px; border-radius:50%; background:#52e3b3; box-shadow:0 0 12px rgba(82,227,179,.8); }
+  .hero { margin:0 12px 16px; padding:20px; border-radius:20px; border:1px solid rgba(125,145,255,.2); background:linear-gradient(135deg,rgba(29,43,78,.98),rgba(15,25,43,.96)); box-shadow:0 14px 34px rgba(0,0,0,.18); }
+  .hero-kicker { color:#8fa2ff; font-size:10px; font-weight:800; letter-spacing:2px; margin-bottom:12px; }
+  .hero-title { font-size:25px; line-height:1.15; font-weight:850; letter-spacing:-.6px; }
+  .hero-copy { margin-top:10px; max-width:280px; color:#9eabc7; font-size:12px; line-height:1.5; }
+  .hero-stats { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin-top:20px; }
+  .hero-stats div { padding:10px 8px; border-radius:11px; background:rgba(255,255,255,.045); min-width:0; }
+  .hero-stats strong { display:block; font-size:12px; color:#f2f5ff; white-space:nowrap; }
+  .hero-stats span { display:block; margin-top:5px; color:#8e9bb8; font-size:10px; line-height:1.3; }
+  .screen { padding:12px; }
+  .add-row { margin:0 0 14px; gap:9px; }
+  input, select { background:#111a2a; border:1px solid #202d45; border-radius:12px; color:#edf2ff; min-width:0; }
+  input::placeholder { color:#687796; }
+  button.action { border-radius:12px; background:linear-gradient(135deg,#7187ff,#5369e8); box-shadow:0 5px 18px rgba(83,105,232,.2); }
+  .card, .result-box, .reason-item { background:linear-gradient(145deg,#141e31,#101827); border:1px solid #202d43; border-radius:16px; }
+  .card { padding:15px; margin-bottom:10px; box-shadow:0 5px 15px rgba(0,0,0,.09); }
+  .symbol { color:#f0f4ff; font-size:15px; letter-spacing:.1px; }
+  .conf { color:#8492b0; line-height:1.45; }
+  .badge { padding:7px 10px; font-size:11px; letter-spacing:.4px; }
+  .LONG, .LONG_ALL { background:#123e39; color:#69efc0; border:1px solid #1e6b5c; }
+  .SHORT, .SHORT_ALL { background:#482532; color:#ff9cb0; border:1px solid #783b4d; }
+  .NEUTRAL, .MIXED { background:#252f42; color:#a8b4ca; border:1px solid #34415a; }
+  .LONG_MAJORITY { background:#123e39; color:#69efc0; }
+  .SHORT_MAJORITY { background:#482532; color:#ff9cb0; }
+  .remove-btn { background:#202b40; color:#9ba9c3; }
+  .field label, .row .label { color:#8c9ab7; }
+  .row { border-color:#202b40; }
+  .detail-title { letter-spacing:-.6px; }
+  .reasons h3 { color:#dfe7ff; }
+  .reason-item { color:#b9c5df; }
+  .empty { color:#8997b4; padding:32px 16px; }
+  .error { background:rgba(239,68,68,.09); border-radius:12px; }
+  .disclaimer { color:#72809d; }
+  .tabbar { background:rgba(9,15,27,.97); border-top:1px solid #1e2a40; backdrop-filter:blur(18px); }
+  .tab { padding:10px 3px 9px; color:#7583a0; font-weight:600; }
+  .tab .icon { font-size:19px; }
+  .tab.active { color:#a7b5ff; }
+  .tab.active .icon { filter:drop-shadow(0 0 7px rgba(116,142,255,.45)); }
+  @media (min-width:600px) { .hero { max-width:720px; margin-left:auto; margin-right:auto; } .screen { max-width:744px; margin:0 auto; } header { padding-left:max(18px,calc((100% - 744px)/2)); padding-right:max(18px,calc((100% - 744px)/2)); } }
 </style>
 </head>
 <body>
   <header>
-    📊 Signal Panel<div class="sub">Технический расклад по активам</div>
-    <div class="strategy-switch" id="strategy-switch"></div>
+    <div class="brandline"><span class="brandmark">S</span><div><div class="brandtitle">SIGNAL<span> / LAB</span></div><div class="sub">Крипторынок · аналитическая панель</div></div></div>
+    <div class="strategy-pill active"><span class="pulse-dot"></span> ФИЛЬТР-ТРЕНД <span class="paper-tag">PAPER</span></div>
   </header>
+  <section class="hero">
+    <div class="hero-kicker">MARKET INTELLIGENCE</div>
+    <div class="hero-title">Решения — по сигналам,<br>не по эмоциям.</div>
+    <div class="hero-copy">Закрытые свечи · контроль риска · никаких реальных ордеров</div>
+    <div class="hero-stats"><div><strong>5m / 15m</strong><span>Сканер Lighter</span></div><div><strong>3× max</strong><span>Лимит плеча</span></div><div><strong>0</strong><span>Автоордеров</span></div></div>
+  </section>
 
   <!-- LIST -->
   <div class="screen active" id="screen-list">
@@ -489,32 +545,8 @@ async function removeAlert(id) {
   } catch (e) {}
 }
 
-// ---------- strategy switch ----------
-async function loadStrategy() {
-  try {
-    const res = await fetch('/api/strategy', { headers: authHeaders() });
-    const d = await res.json();
-    renderStrategySwitch(d);
-  } catch (e) {}
-}
+// Single strategy is intentionally fixed to guarded.
 
-function renderStrategySwitch(d) {
-  const box = document.getElementById('strategy-switch');
-  box.innerHTML = d.options.map(o => `
-    <div class="strategy-pill ${o.key === d.current ? 'active' : ''}" onclick="switchStrategy('${o.key}')">${o.name}</div>
-  `).join('');
-}
-
-async function switchStrategy(key) {
-  try {
-    const res = await fetch('/api/strategy', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ strategy: key }) });
-    const d = await res.json();
-    renderStrategySwitch(d);
-    loadSignals();
-  } catch (e) {}
-}
-
-loadStrategy();
 loadSignals();
 setInterval(loadSignals, 60000);
 </script>
@@ -685,17 +717,12 @@ def api_backtest(symbol):
 @require_webapp_auth
 def api_strategy():
     state = storage.load()
-    if request.method == "POST":
-        data = request.get_json(force=True) or {}
-        choice = (data.get("strategy") or "").lower()
-        if choice not in STRATEGY_NAMES:
-            return jsonify({"error": "unknown strategy"}), 400
-        state["strategy"] = choice
+    if state.get("strategy") != "guarded":
+        state["strategy"] = "guarded"
         storage.save(state)
-    current = state.get("strategy", "guarded")
     return jsonify({
-        "current": current,
-        "options": [{"key": k, "name": v} for k, v in STRATEGY_NAMES.items()],
+        "current": "guarded",
+        "options": [{"key": "guarded", "name": "Фильтр-тренд"}],
     })
 
 
