@@ -586,10 +586,10 @@ def api_risk():
     if not symbol or balance <= 0 or risk_pct <= 0:
         return jsonify({"error": "Проверь введённые значения"}), 400
 
-    strategy = storage.load().get("strategy", "eureka")
+    strategy = storage.load().get("strategy", "guarded")
     try:
-        df = client.fetch_ohlcv(symbol, timeframe="1h", limit=200)
-        if len(df) < 60:
+        df = client.fetch_ohlcv(symbol, timeframe="1h", limit=260)
+        if len(df) < 220:
             return jsonify({"error": "Недостаточно данных по этой паре"}), 400
         imbalance = client.fetch_order_book_imbalance(symbol)
         funding = client.fetch_funding_rate(symbol)
@@ -620,12 +620,12 @@ def api_risk():
 @require_webapp_auth
 def api_mtf(symbol):
     symbol = symbol.upper()
-    strategy = storage.load().get("strategy", "eureka")
+    strategy = storage.load().get("strategy", "guarded")
     results = {}
     for tf in MTF_TIMEFRAMES:
         try:
-            df = client.fetch_ohlcv(symbol, timeframe=tf, limit=200)
-            if len(df) < 60:
+            df = client.fetch_ohlcv(symbol, timeframe=tf, limit=260)
+            if len(df) < 220:
                 continue
             imbalance = client.fetch_order_book_imbalance(symbol)
             funding = client.fetch_funding_rate(symbol)
@@ -663,7 +663,7 @@ def api_backtest(symbol):
         limit = min(int(request.args.get("limit", 300)), 1000)
     except ValueError:
         limit = 300
-    strategy = request.args.get("strategy") or storage.load().get("strategy", "eureka")
+    strategy = request.args.get("strategy") or storage.load().get("strategy", "guarded")
     if strategy not in STRATEGY_NAMES:
         strategy = "guarded"
 
