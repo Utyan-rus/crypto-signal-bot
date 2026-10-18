@@ -1,0 +1,39 @@
+name: Lighter market-regime filter research
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "regime_research.py"
+      - ".github/workflows/regime-research.yml"
+  workflow_dispatch:
+    inputs:
+      max_markets:
+        description: "Markets to test"
+        required: true
+        default: "5"
+        type: choice
+        options: ["5", "10", "25"]
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run fixed market-regime filter study
+        run: python regime_research.py --days 90 --max-markets "${{ inputs.max_markets || '5' }}" --out regime-research-results
+      - name: Upload research results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lighter-regime-research
+          path: regime-research-results/
+          if-no-files-found: warn
+          retention-days: 30
