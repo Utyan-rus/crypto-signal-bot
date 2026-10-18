@@ -68,14 +68,25 @@ def get_markets():
     if isinstance(rows, dict):
         rows = rows.get("order_books", [])
     out = []
+    excluded = {"US500", "US100", "US30", "USDCAD", "EURUSD", "GBPUSD",
+                "USDJPY", "AUDUSD", "XAU", "XAG", "XCU"}
+    priority = {"BTC": 0, "ETH": 1, "SOL": 2, "BNB": 3, "XRP": 4,
+                "DOGE": 5, "ADA": 6, "AVAX": 7, "LINK": 8, "LTC": 9}
     for row in rows or []:
         mid = field(row, "market_id", "marketId")
         sym = field(row, "symbol", "market_symbol", "marketSymbol")
         status = str(field(row, "status", default="active")).lower()
         typ = str(field(row, "market_type", "marketType", default="perp")).lower()
-        if mid is not None and sym and "inactive" not in status and "closed" not in status and "spot" not in typ:
-            out.append({"id": int(mid), "symbol": str(sym)})
-    return out
+        if mid is None or not sym or "inactive" in status or "closed" in status or "spot" in typ:
+            continue
+        base = str(sym).upper().replace("-PERP", "").replace("/USDC", "").replace("/USDT", "")
+        if base in excluded or (base.startswith("USD") and len(base) == 6):
+            continue
+        out.append({"id": int(mid), "symbol": str(sym)})
+    def sort_key(item):
+        base = item["symbol"].upper().replace("-PERP", "").replace("/USDC", "").replace("/USDT", "")
+        return (priority.get(base, 100), item["symbol"])
+    return sorted(out, key=sort_key)
 
 
 def fetch_candles(market_id, resolution, start_ts, end_ts):
