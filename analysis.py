@@ -334,8 +334,83 @@ def analyze_yabloko(df: pd.DataFrame, order_book_imbalance: float = 0.0,
     )
 
 
-STRATEGIES = {"eureka": analyze_eureka, "yabloko": analyze_yabloko}
-STRATEGY_NAMES = {"eureka": "Эврика", "yabloko": "Яблоко"}
+
+
+def analyze_guarded(df: pd.DataFrame, order_book_imbalance: float = 0.0,
+                    funding_rate: float | None = None) -> Signal:
+    """Conservative trend-following filter; neutral is preferred to weak setups.
+
+    Uses closed-candle OHLCV only (ExchangeClient drops the currently forming
+    candle). The confidence value is a rule-strength score, not a probability.
+    """
+    required = {"open", "high", "low", "close", "volume"}
+    if not required.issubset(df.columns) or len(df) < 220:
+        price = float(df["close"].iloc[-1]) if len(df) else 0.0
+        return Signal("NEUTRAL", 0, "HIGH", ["Нужно минимум 220 закрытых свечей"], price, price, price, 0.0)
+
+    close = df["close"].astype(float)
+    last = float(close.iloc[-1])
+    e20, e50, e200 = ema(close, 20), ema(close, 50), ema(close, 200)
+    rsi_value = float(rsi(close).iloc[-1])
+    atr_value = float(atr(df, 14).iloc[-1])
+    adx_values, plus_di, minus_di = adx(df, 14)
+    adx_value = float(adx_values.iloc[-1])
+    macd_line, macd_signal, macd_hist = macd(close)
+    hist = float(macd_hist.iloc[-1])
+    volume_avg = float(df["volume"].rolling(20).mean().iloc[-1])
+    volume_now = float(df["volume"].iloc[-1])
+
+    vals = [last, float(e20.iloc[-1]), float(e50.iloc[-1]), float(e200.iloc[-1]),
+            rsi_value, atr_value, adx_value, hist, volume_avg]
+    if not all(np.isfinite(x) for x in vals) or last <= 0 or atr_value <= 0:
+        return Signal("NEUTRAL", 0, "HIGH", ["Индикаторы ещё не сформировались"], last, last, last, 0.0)
+
+    reasons = [
+        f"EMA20/50/200: {e20.iloc[-1]:.6g} / {e50.iloc[-1]:.6g} / {e200.iloc[-1]:.6g}",
+        f"ADX {adx_value:.1f}; RSI {rsi_value:.1f}",
+    ]
+    long_trend = last > e200.iloc[-1] and e20.iloc[-1] > e50.iloc[-1] and e50.iloc[-1] > e200.iloc[-1]
+    short_trend = last < e200.iloc[-1] and e20.iloc[-1] < e50.iloc[-1] and e50.iloc[-1] < e200.iloc[-1]
+    volume_ok = volume_avg > 0 and volume_now >= volume_avg * 0.8
+    long_momentum = 52 <= rsi_value <= 68 and hist > 0 and float(plus_di.iloc[-1]) > float(minus_di.iloc[-1])
+    short_momentum = 32 <= rsi_value <= 48 and hist < 0 and float(minus_di.iloc[-1]) > float(plus_di.iloc[-1])
+
+    direction = "NEUTRAL"
+    score = 0
+    if adx_value >= 18 and volume_ok and long_trend and long_momentum:
+        direction, score = "LONG", 4
+        reasons.append("Тренд, моментум и объём согласованы")
+    elif adx_value >= 18 and volume_ok and short_trend and short_momentum:
+        direction, score = "SHORT", 4
+        reasons.append("Тренд, моментум и объём согласованы")
+    else:
+        reasons.append("Нет полного подтверждения — вход пропущен")
+        if adx_value < 18:
+            reasons.append("ADX ниже 18: недостаточно выраженный тренд")
+        if not volume_ok:
+            reasons.append("Объём ниже фильтра")
+        if not (long_trend or short_trend):
+            reasons.append("EMA20/50/200 не подтверждают единое направление")
+        if order_book_imbalance > 0.2:
+            reasons.append("Стакан смещён к покупателям, но сам по себе не создаёт сигнал")
+        elif order_book_imbalance < -0.2:
+            reasons.append("Стакан смещён к продавцам, но сам по себе не создаёт сигнал")
+
+    atr_pct = atr_value / last * 100
+    risk_level = "LOW" if atr_pct < 1 else ("MEDIUM" if atr_pct < 3 else "HIGH")
+    stop_mult, target_mult = 1.5, 3.0
+    if direction == "LONG":
+        stop_loss, take_profit = last - stop_mult * atr_value, last + target_mult * atr_value
+    elif direction == "SHORT":
+        stop_loss, take_profit = last + stop_mult * atr_value, last - target_mult * atr_value
+    else:
+        stop_loss, take_profit = last - stop_mult * atr_value, last + stop_mult * atr_value
+    confidence = 75 if direction != "NEUTRAL" else 25
+    return Signal(direction, confidence, risk_level, reasons, last, stop_loss, take_profit, atr_value)
+
+
+STRATEGIES = {"guarded": analyze_guarded, "eureka": analyze_eureka, "yabloko": analyze_yabloko}
+STRATEGY_NAMES = {"guarded": "Фильтр-тренд", "eureka": "Эврика", "yabloko": "Яблоко"}
 
 
 def analyze(df: pd.DataFrame, order_book_imbalance: float = 0.0,
