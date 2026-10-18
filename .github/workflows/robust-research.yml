@@ -1,6 +1,11 @@
 name: Robust Lighter paper research
 
 on:
+  pull_request:
+    paths:
+      - "robust_research.py"
+      - "tests/test_robust_research.py"
+      - ".github/workflows/robust-research.yml"
   push:
     branches: [main]
     paths:
