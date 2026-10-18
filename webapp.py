@@ -93,9 +93,9 @@ def get_panel_symbols(state: dict) -> list:
 
 def compute_signal_dict(symbol: str, timeframe: str = PANEL_TIMEFRAME, strategy: str = None):
     if strategy is None:
-        strategy = storage.load().get("strategy", "eureka")
-    df = client.fetch_ohlcv(symbol, timeframe=timeframe, limit=200)
-    if len(df) < 60:
+        strategy = storage.load().get("strategy", "guarded")
+    df = client.fetch_ohlcv(symbol, timeframe=timeframe, limit=260)
+    if len(df) < 220:
         return None
     imbalance = client.fetch_order_book_imbalance(symbol)
     funding = client.fetch_funding_rate(symbol)
@@ -665,7 +665,7 @@ def api_backtest(symbol):
         limit = 300
     strategy = request.args.get("strategy") or storage.load().get("strategy", "eureka")
     if strategy not in STRATEGY_NAMES:
-        strategy = "eureka"
+        strategy = "guarded"
 
     try:
         df = client.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
@@ -692,7 +692,7 @@ def api_strategy():
             return jsonify({"error": "unknown strategy"}), 400
         state["strategy"] = choice
         storage.save(state)
-    current = state.get("strategy", "eureka")
+    current = state.get("strategy", "guarded")
     return jsonify({
         "current": current,
         "options": [{"key": k, "name": v} for k, v in STRATEGY_NAMES.items()],
