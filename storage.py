@@ -24,6 +24,7 @@ _DEFAULT_STATE = {
     "authorized_chat_ids": [],  # list[int] — chat ids allowed to use the bot
     "invite_token": None,       # str — required as /start payload to get authorized
     "price_alerts": {},         # alert_id(str) -> {"chat_id","symbol","op","price"}
+    "strategy": "eureka",       # "eureka" or "yabloko" — active everywhere (bot + panel)
 }
 
 

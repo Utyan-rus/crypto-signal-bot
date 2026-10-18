@@ -51,6 +51,37 @@ def bollinger_bands(series: pd.Series, period: int = 20, num_std: float = 2.0):
     return upper, mid, lower
 
 
+def adx(df: pd.DataFrame, period: int = 14):
+    """Average Directional Index + the two directional indicators it's built from."""
+    high, low, close = df["high"], df["low"], df["close"]
+    up_move = high.diff()
+    down_move = -low.diff()
+
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+
+    tr1 = high - low
+    tr2 = (high - close.shift()).abs()
+    tr3 = (low - close.shift()).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    smoothed_tr = tr.ewm(alpha=1 / period, adjust=False).mean()
+    plus_di = 100 * pd.Series(plus_dm, index=df.index).ewm(alpha=1 / period, adjust=False).mean() / smoothed_tr
+    minus_di = 100 * pd.Series(minus_dm, index=df.index).ewm(alpha=1 / period, adjust=False).mean() / smoothed_tr
+
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
+    adx_val = dx.ewm(alpha=1 / period, adjust=False).mean()
+    return adx_val, plus_di, minus_di
+
+
+def donchian_channel(df: pd.DataFrame, period: int = 20):
+    """Highest high / lowest low over the PRIOR `period` bars (shifted, so the
+    current bar can't look at itself — avoids lookahead bias on a breakout)."""
+    upper = df["high"].shift(1).rolling(period).max()
+    lower = df["low"].shift(1).rolling(period).min()
+    return upper, lower
+
+
 class Signal:
     def __init__(self, direction: str, confidence: int, risk_level: str, reasons: list,
                  entry: float, stop_loss: float, take_profit: float, atr_value: float):
@@ -64,8 +95,13 @@ class Signal:
         self.atr_value = atr_value
 
 
-def analyze(df: pd.DataFrame, order_book_imbalance: float = 0.0,
-            funding_rate: float | None = None) -> Signal:
+def analyze_eureka(df: pd.DataFrame, order_book_imbalance: float = 0.0,
+                    funding_rate: float | None = None) -> Signal:
+    """
+    "Эврика" — исходная стратегия: смесь индикаторов тренда (EMA),
+    моментума (RSI, MACD), mean-reversion (Bollinger Bands), потока
+    ордеров и фандинга, с равными весами голосов.
+    """
     close = df["close"]
     last_price = close.iloc[-1]
 
@@ -175,7 +211,135 @@ def analyze(df: pd.DataFrame, order_book_imbalance: float = 0.0,
     )
 
 
-def backtest(df: pd.DataFrame, lookback: int = 60, horizon: int = 24) -> dict:
+def analyze_yabloko(df: pd.DataFrame, order_book_imbalance: float = 0.0,
+                     funding_rate: float | None = None) -> Signal:
+    """
+    "Яблоко" — другой механизм, не переразвес тех же индикаторов: пробой
+    20-периодного канала (Donchian), с фильтром силы и направления тренда
+    по ADX/+DI/-DI и подтверждением объёмом. Классический трендследящий
+    подход — молчит (NEUTRAL) большую часть времени и даёт сигнал только
+    на подтверждённых пробоях, в отличие от "Эврики", которая оценивает
+    каждую свечу через mean-reversion + моментум одновременно.
+    """
+    close = df["close"]
+    volume = df["volume"]
+    last_price = close.iloc[-1]
+
+    upper_channel, lower_channel = donchian_channel(df, period=20)
+    adx_val, plus_di, minus_di = adx(df, period=14)
+    atr_val = atr(df, period=14).iloc[-1]
+    avg_volume = volume.rolling(20).mean().iloc[-1]
+    last_volume = volume.iloc[-1]
+
+    last_upper = upper_channel.iloc[-1]
+    last_lower = lower_channel.iloc[-1]
+    last_adx = adx_val.iloc[-1]
+    last_plus_di = plus_di.iloc[-1]
+    last_minus_di = minus_di.iloc[-1]
+
+    score = 0
+    reasons = []
+
+    breakout_up = last_price > last_upper
+    breakout_down = last_price < last_lower
+
+    if breakout_up:
+        score += 2
+        reasons.append(f"Пробой 20-периодного максимума ({last_upper:.4f})")
+    elif breakout_down:
+        score -= 2
+        reasons.append(f"Пробой 20-периодного минимума ({last_lower:.4f})")
+    else:
+        reasons.append("Цена внутри 20-периодного канала — пробоя нет")
+
+    if pd.notna(last_adx):
+        if last_adx > 25:
+            if last_plus_di > last_minus_di:
+                score += 1
+                reasons.append(f"ADX {last_adx:.1f} — сильный тренд, +DI доминирует")
+            else:
+                score -= 1
+                reasons.append(f"ADX {last_adx:.1f} — сильный тренд, -DI доминирует")
+        elif last_adx < 15:
+            reasons.append(f"ADX {last_adx:.1f} — рынок плоский, сигнал менее надёжен")
+            score = int(score * 0.5)
+
+    if pd.notna(avg_volume) and avg_volume > 0:
+        if last_volume > avg_volume * 1.5 and score != 0:
+            score += 1 if score > 0 else -1
+            reasons.append("Объём выше среднего — движение подтверждено объёмом")
+        elif score != 0:
+            reasons.append("Объём не подтверждает движение (ниже 1.5x среднего)")
+
+    if order_book_imbalance > 0.15:
+        score += 1
+        reasons.append(f"Стакан сильно смещён к покупке ({order_book_imbalance:.2f})")
+    elif order_book_imbalance < -0.15:
+        score -= 1
+        reasons.append(f"Стакан сильно смещён к продаже ({order_book_imbalance:.2f})")
+
+    if funding_rate is not None:
+        if funding_rate > 0.0005:
+            score -= 1
+            reasons.append(f"Funding высокий ({funding_rate:.4%}) — лонги перегружены")
+        elif funding_rate < -0.0005:
+            score += 1
+            reasons.append(f"Funding отрицательный ({funding_rate:.4%}) — шорты перегружены")
+
+    max_score = 6
+    confidence = min(100, int(abs(score) / max_score * 100))
+    if score >= 2:
+        direction = "LONG"
+    elif score <= -2:
+        direction = "SHORT"
+    else:
+        direction = "NEUTRAL"
+        confidence = min(confidence, 35)
+
+    atr_pct = (atr_val / last_price) * 100 if last_price else 0
+    if atr_pct < 1:
+        risk_level = "LOW"
+    elif atr_pct < 3:
+        risk_level = "MEDIUM"
+    else:
+        risk_level = "HIGH"
+
+    # Trend-following sizing: tighter stop, wider target than Eureka — this
+    # strategy aims for fewer, bigger moves rather than a high hit-rate.
+    if direction == "LONG":
+        stop_loss = last_price - 1.5 * atr_val
+        take_profit = last_price + 4 * atr_val
+    elif direction == "SHORT":
+        stop_loss = last_price + 1.5 * atr_val
+        take_profit = last_price - 4 * atr_val
+    else:
+        stop_loss = last_price - 1.5 * atr_val
+        take_profit = last_price + 1.5 * atr_val
+
+    return Signal(
+        direction=direction,
+        confidence=confidence,
+        risk_level=risk_level,
+        reasons=reasons,
+        entry=last_price,
+        stop_loss=stop_loss,
+        take_profit=take_profit,
+        atr_value=atr_val,
+    )
+
+
+STRATEGIES = {"eureka": analyze_eureka, "yabloko": analyze_yabloko}
+STRATEGY_NAMES = {"eureka": "Эврика", "yabloko": "Яблоко"}
+
+
+def analyze(df: pd.DataFrame, order_book_imbalance: float = 0.0,
+            funding_rate: float | None = None, strategy: str = "eureka") -> Signal:
+    func = STRATEGIES.get(strategy, analyze_eureka)
+    return func(df, order_book_imbalance=order_book_imbalance, funding_rate=funding_rate)
+
+
+def backtest(df: pd.DataFrame, lookback: int = 60, horizon: int = 24,
+             strategy: str = "eureka") -> dict:
     """
     Retrospective check: walks a rolling window through the given candles,
     recomputes this same rule-based signal at each point using only data
@@ -186,13 +350,14 @@ def backtest(df: pd.DataFrame, lookback: int = 60, horizon: int = 24) -> dict:
     rules — not a prediction, and no guarantee future performance will
     look similar.
     """
+    func = STRATEGIES.get(strategy, analyze_eureka)
     results = {"LONG": {"count": 0, "wins": 0}, "SHORT": {"count": 0, "wins": 0}}
     close = df["close"]
     n = len(df)
 
     for i in range(lookback, n - horizon):
         window = df.iloc[: i + 1]
-        sig = analyze(window)
+        sig = func(window)
         if sig.direction == "NEUTRAL":
             continue
 

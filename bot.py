@@ -34,7 +34,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppI
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from exchange import ExchangeClient
-from analysis import analyze, backtest
+from analysis import analyze, backtest, STRATEGY_NAMES
 import storage
 import webapp
 
@@ -93,9 +93,40 @@ WELCOME_TEXT = (
     "/unwatch BTC/USDT, /mywatches\n"
     "/alert BTC/USDT > 70000 — ценовой алерт, /alerts, /unalert id\n"
     "/panel — панель со списком активов (там же калькулятор риска, MTF, бэктест, алерты)\n"
-    "/addcoin BTC/USDT, /removecoin BTC/USDT, /coins — монеты в панели\n\n"
+    "/addcoin BTC/USDT, /removecoin BTC/USDT, /coins — монеты в панели\n"
+    "/strategy [eureka|yabloko] — показать/переключить активную стратегию\n\n"
     "Я не торгую за тебя и не имею доступа к твоему кошельку."
 )
+
+
+@require_auth
+async def strategy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    state = storage.load()
+    current = state.get("strategy", "eureka")
+
+    if not context.args:
+        lines = [f"Текущая стратегия: *{STRATEGY_NAMES[current]}* (`{current}`)\n"]
+        for key, name in STRATEGY_NAMES.items():
+            mark = "✅" if key == current else "▫️"
+            lines.append(f"{mark} {name} (`{key}`)")
+        lines.append(f"\nПереключить: /strategy {'yabloko' if current == 'eureka' else 'eureka'}")
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        return
+
+    choice = context.args[0].lower()
+    if choice not in STRATEGY_NAMES:
+        await update.message.reply_text(
+            "Неизвестная стратегия. Доступно: " + ", ".join(STRATEGY_NAMES.keys())
+        )
+        return
+
+    state["strategy"] = choice
+    storage.save(state)
+    await update.message.reply_text(
+        f"Стратегия переключена на *{STRATEGY_NAMES[choice]}* (`{choice}`). "
+        f"Действует везде: /analyze, /watch, /panel, /mtf, /risk.",
+        parse_mode="Markdown",
+    )
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -138,8 +169,10 @@ async def analyze_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     symbol = context.args[0].upper()
     timeframe = context.args[1] if len(context.args) > 1 else "1h"
+    state = storage.load()
+    strategy = state.get("strategy", "eureka")
 
-    await update.message.reply_text(f"Смотрю {symbol} ({timeframe})…")
+    await update.message.reply_text(f"Смотрю {symbol} ({timeframe}, стратегия {STRATEGY_NAMES[strategy]})…")
 
     try:
         df = client.fetch_ohlcv(symbol, timeframe=timeframe, limit=200)
@@ -149,14 +182,14 @@ async def analyze_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         imbalance = client.fetch_order_book_imbalance(symbol)
         funding = client.fetch_funding_rate(symbol)
-        signal = analyze(df, order_book_imbalance=imbalance, funding_rate=funding)
+        signal = analyze(df, order_book_imbalance=imbalance, funding_rate=funding, strategy=strategy)
 
         direction_emoji = {"LONG": "🟢 LONG", "SHORT": "🔴 SHORT", "NEUTRAL": "⚪ NEUTRAL"}
         risk_emoji = {"LOW": "🟢 низкий", "MEDIUM": "🟡 средний", "HIGH": "🔴 высокий"}
         reasons_text = "\n".join(f"• {r}" for r in signal.reasons)
 
         msg = (
-            f"*{symbol}* ({timeframe})\n"
+            f"*{symbol}* ({timeframe}) · {STRATEGY_NAMES[strategy]}\n"
             f"Сигнал: *{direction_emoji[signal.direction]}*\n"
             f"Уверенность: {signal.confidence}%\n"
             f"Риск (волатильность): {risk_emoji[signal.risk_level]}\n\n"
@@ -179,7 +212,11 @@ async def mtf_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Укажи пару: /mtf BTC/USDT")
         return
     symbol = context.args[0].upper()
-    await update.message.reply_text(f"Смотрю {symbol} на {', '.join(MTF_TIMEFRAMES)}…")
+    state = storage.load()
+    strategy = state.get("strategy", "eureka")
+    await update.message.reply_text(
+        f"Смотрю {symbol} на {', '.join(MTF_TIMEFRAMES)} ({STRATEGY_NAMES[strategy]})…"
+    )
 
     results = {}
     for tf in MTF_TIMEFRAMES:
@@ -189,7 +226,7 @@ async def mtf_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 continue
             imbalance = client.fetch_order_book_imbalance(symbol)
             funding = client.fetch_funding_rate(symbol)
-            results[tf] = analyze(df, order_book_imbalance=imbalance, funding_rate=funding)
+            results[tf] = analyze(df, order_book_imbalance=imbalance, funding_rate=funding, strategy=strategy)
         except Exception:
             log.exception(f"mtf failed for {symbol} {tf}")
 
@@ -224,7 +261,9 @@ async def mtf_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @require_auth
 async def backtest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Использование: /backtest BTC/USDT [таймфрейм] [кол-во свечей]")
+        await update.message.reply_text(
+            "Использование: /backtest BTC/USDT [таймфрейм] [кол-во свечей] [eureka|yabloko]"
+        )
         return
     symbol = context.args[0].upper()
     timeframe = context.args[1] if len(context.args) > 1 else "1h"
@@ -233,7 +272,15 @@ async def backtest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         limit = 500
 
-    await update.message.reply_text(f"Прогоняю бэктест по {symbol} ({timeframe}, {limit} свечей)…")
+    state = storage.load()
+    strategy = context.args[3].lower() if len(context.args) > 3 else state.get("strategy", "eureka")
+    if strategy not in STRATEGY_NAMES:
+        await update.message.reply_text("Неизвестная стратегия. Доступно: " + ", ".join(STRATEGY_NAMES.keys()))
+        return
+
+    await update.message.reply_text(
+        f"Прогоняю бэктест по {symbol} ({timeframe}, {limit} свечей, {STRATEGY_NAMES[strategy]})…"
+    )
 
     try:
         df = client.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
@@ -241,8 +288,8 @@ async def backtest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Маловато данных для бэктеста.")
             return
 
-        results = backtest(df)
-        lines = [f"*{symbol}* бэктест ({timeframe}, {len(df)} свечей, горизонт 24 свечи)\n"]
+        results = backtest(df, strategy=strategy)
+        lines = [f"*{symbol}* бэктест ({timeframe}, {len(df)} свечей, {STRATEGY_NAMES[strategy]}, горизонт 24 свечи)\n"]
         for direction in ("LONG", "SHORT"):
             c = results[direction]["count"]
             w = results[direction]["wins"]
@@ -279,6 +326,9 @@ async def risk_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Баланс и риск % должны быть больше нуля.")
         return
 
+    state = storage.load()
+    strategy = state.get("strategy", "eureka")
+
     try:
         df = client.fetch_ohlcv(symbol, timeframe="1h", limit=200)
         if len(df) < 60:
@@ -286,11 +336,11 @@ async def risk_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         imbalance = client.fetch_order_book_imbalance(symbol)
         funding = client.fetch_funding_rate(symbol)
-        signal = analyze(df, order_book_imbalance=imbalance, funding_rate=funding)
+        signal = analyze(df, order_book_imbalance=imbalance, funding_rate=funding, strategy=strategy)
 
         if signal.direction == "NEUTRAL":
             await update.message.reply_text(
-                f"{symbol}: сигнал сейчас нейтральный, чёткого сетапа (и стопа) для расчёта нет."
+                f"{symbol}: сигнал сейчас нейтральный ({STRATEGY_NAMES[strategy]}), чёткого сетапа для расчёта нет."
             )
             return
 
@@ -305,7 +355,7 @@ async def risk_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         base_asset = symbol.split("/")[0]
 
         msg = (
-            f"*{symbol}* — расчёт размера позиции ({signal.direction})\n\n"
+            f"*{symbol}* — расчёт размера позиции ({signal.direction}, {STRATEGY_NAMES[strategy]})\n\n"
             f"Риск на сделку: ${risk_amount:.2f} ({risk_pct}% от ${balance:.2f})\n"
             f"Цена входа: {signal.entry:.4f}\n"
             f"Стоп-лосс (ориентир): {signal.stop_loss:.4f} (дистанция {stop_distance:.4f})\n\n"
@@ -369,6 +419,7 @@ async def mywatches_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def check_watchlist(context: ContextTypes.DEFAULT_TYPE):
     """Runs periodically; pushes a message only when a watched pair has a strong signal."""
     state = storage.load()
+    strategy = state.get("strategy", "eureka")
     for chat_id_str, w in list(state["watchlist"].items()):
         try:
             df = client.fetch_ohlcv(w["symbol"], timeframe=w["timeframe"], limit=200)
@@ -376,7 +427,7 @@ async def check_watchlist(context: ContextTypes.DEFAULT_TYPE):
                 continue
             imbalance = client.fetch_order_book_imbalance(w["symbol"])
             funding = client.fetch_funding_rate(w["symbol"])
-            signal = analyze(df, order_book_imbalance=imbalance, funding_rate=funding)
+            signal = analyze(df, order_book_imbalance=imbalance, funding_rate=funding, strategy=strategy)
 
             if signal.direction != "NEUTRAL" and signal.confidence >= w["min_confidence"]:
                 direction_emoji = {"LONG": "🟢 LONG", "SHORT": "🔴 SHORT"}
@@ -470,16 +521,19 @@ async def check_price_alerts(context: ContextTypes.DEFAULT_TYPE):
 # --------------------------------------------------------------- panel ----
 
 async def refresh_one_symbol(symbol: str):
+    state = storage.load()
+    strategy = state.get("strategy", "eureka")
     try:
         df = client.fetch_ohlcv(symbol, timeframe=PANEL_TIMEFRAME, limit=200)
         if len(df) < 60:
             return
         imbalance = client.fetch_order_book_imbalance(symbol)
         funding = client.fetch_funding_rate(symbol)
-        signal = analyze(df, order_book_imbalance=imbalance, funding_rate=funding)
+        signal = analyze(df, order_book_imbalance=imbalance, funding_rate=funding, strategy=strategy)
         webapp.SIGNALS_CACHE[symbol] = {
             "symbol": symbol,
             "timeframe": PANEL_TIMEFRAME,
+            "strategy": strategy,
             "direction": signal.direction,
             "confidence": signal.confidence,
             "risk_level": signal.risk_level,
@@ -594,6 +648,7 @@ def main():
     app.add_handler(CommandHandler("addcoin", addcoin_cmd))
     app.add_handler(CommandHandler("removecoin", removecoin_cmd))
     app.add_handler(CommandHandler("coins", coins_cmd))
+    app.add_handler(CommandHandler("strategy", strategy_cmd))
 
     if app.job_queue:
         app.job_queue.run_repeating(check_watchlist, interval=CHECK_INTERVAL_SECONDS, first=30)

@@ -24,7 +24,7 @@ from urllib.parse import parse_qsl
 
 from flask import Flask, jsonify, render_template_string, request
 
-from analysis import analyze, backtest as run_backtest
+from analysis import analyze, backtest as run_backtest, STRATEGY_NAMES
 from exchange import ExchangeClient
 import storage
 
@@ -91,16 +91,19 @@ def get_panel_symbols(state: dict) -> list:
     return state["panel_symbols"] if state.get("panel_symbols") else list(DEFAULT_PANEL_SYMBOLS)
 
 
-def compute_signal_dict(symbol: str, timeframe: str = PANEL_TIMEFRAME):
+def compute_signal_dict(symbol: str, timeframe: str = PANEL_TIMEFRAME, strategy: str = None):
+    if strategy is None:
+        strategy = storage.load().get("strategy", "eureka")
     df = client.fetch_ohlcv(symbol, timeframe=timeframe, limit=200)
     if len(df) < 60:
         return None
     imbalance = client.fetch_order_book_imbalance(symbol)
     funding = client.fetch_funding_rate(symbol)
-    signal = analyze(df, order_book_imbalance=imbalance, funding_rate=funding)
+    signal = analyze(df, order_book_imbalance=imbalance, funding_rate=funding, strategy=strategy)
     return {
         "symbol": symbol,
         "timeframe": timeframe,
+        "strategy": strategy,
         "direction": signal.direction,
         "confidence": signal.confidence,
         "risk_level": signal.risk_level,
@@ -209,10 +212,21 @@ PANEL_HTML = """<!DOCTYPE html>
   }
   .tab .icon { font-size: 20px; display: block; margin-bottom: 2px; }
   .tab.active { color: var(--link); }
+
+  .strategy-switch { display: flex; gap: 8px; padding: 0 16px 14px; }
+  .strategy-pill {
+    flex: 1; text-align: center; padding: 8px; border-radius: 10px;
+    background: var(--secondary-bg); font-size: 13px; font-weight: 600;
+    color: var(--hint); cursor: pointer;
+  }
+  .strategy-pill.active { background: var(--button); color: var(--button-text); }
 </style>
 </head>
 <body>
-  <header>📊 Signal Panel<div class="sub">Технический расклад по активам</div></header>
+  <header>
+    📊 Signal Panel<div class="sub">Технический расклад по активам</div>
+    <div class="strategy-switch" id="strategy-switch"></div>
+  </header>
 
   <!-- LIST -->
   <div class="screen active" id="screen-list">
@@ -475,6 +489,32 @@ async function removeAlert(id) {
   } catch (e) {}
 }
 
+// ---------- strategy switch ----------
+async function loadStrategy() {
+  try {
+    const res = await fetch('/api/strategy', { headers: authHeaders() });
+    const d = await res.json();
+    renderStrategySwitch(d);
+  } catch (e) {}
+}
+
+function renderStrategySwitch(d) {
+  const box = document.getElementById('strategy-switch');
+  box.innerHTML = d.options.map(o => `
+    <div class="strategy-pill ${o.key === d.current ? 'active' : ''}" onclick="switchStrategy('${o.key}')">${o.name}</div>
+  `).join('');
+}
+
+async function switchStrategy(key) {
+  try {
+    const res = await fetch('/api/strategy', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ strategy: key }) });
+    const d = await res.json();
+    renderStrategySwitch(d);
+    loadSignals();
+  } catch (e) {}
+}
+
+loadStrategy();
 loadSignals();
 setInterval(loadSignals, 60000);
 </script>
@@ -546,13 +586,14 @@ def api_risk():
     if not symbol or balance <= 0 or risk_pct <= 0:
         return jsonify({"error": "Проверь введённые значения"}), 400
 
+    strategy = storage.load().get("strategy", "eureka")
     try:
         df = client.fetch_ohlcv(symbol, timeframe="1h", limit=200)
         if len(df) < 60:
             return jsonify({"error": "Недостаточно данных по этой паре"}), 400
         imbalance = client.fetch_order_book_imbalance(symbol)
         funding = client.fetch_funding_rate(symbol)
-        signal = analyze(df, order_book_imbalance=imbalance, funding_rate=funding)
+        signal = analyze(df, order_book_imbalance=imbalance, funding_rate=funding, strategy=strategy)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -579,6 +620,7 @@ def api_risk():
 @require_webapp_auth
 def api_mtf(symbol):
     symbol = symbol.upper()
+    strategy = storage.load().get("strategy", "eureka")
     results = {}
     for tf in MTF_TIMEFRAMES:
         try:
@@ -587,7 +629,7 @@ def api_mtf(symbol):
                 continue
             imbalance = client.fetch_order_book_imbalance(symbol)
             funding = client.fetch_funding_rate(symbol)
-            sig = analyze(df, order_book_imbalance=imbalance, funding_rate=funding)
+            sig = analyze(df, order_book_imbalance=imbalance, funding_rate=funding, strategy=strategy)
             results[tf] = {"direction": sig.direction, "confidence": sig.confidence}
         except Exception:
             pass
@@ -621,16 +663,40 @@ def api_backtest(symbol):
         limit = min(int(request.args.get("limit", 300)), 1000)
     except ValueError:
         limit = 300
+    strategy = request.args.get("strategy") or storage.load().get("strategy", "eureka")
+    if strategy not in STRATEGY_NAMES:
+        strategy = "eureka"
 
     try:
         df = client.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
         if len(df) < 100:
             return jsonify({"error": "Недостаточно свечей для бэктеста"}), 400
-        results = run_backtest(df)
+        results = run_backtest(df, strategy=strategy)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-    return jsonify({"symbol": symbol, "timeframe": timeframe, "candles": len(df), "results": results})
+    return jsonify({
+        "symbol": symbol, "timeframe": timeframe, "candles": len(df),
+        "strategy": strategy, "results": results,
+    })
+
+
+@app.route("/api/strategy", methods=["GET", "POST"])
+@require_webapp_auth
+def api_strategy():
+    state = storage.load()
+    if request.method == "POST":
+        data = request.get_json(force=True) or {}
+        choice = (data.get("strategy") or "").lower()
+        if choice not in STRATEGY_NAMES:
+            return jsonify({"error": "unknown strategy"}), 400
+        state["strategy"] = choice
+        storage.save(state)
+    current = state.get("strategy", "eureka")
+    return jsonify({
+        "current": current,
+        "options": [{"key": k, "name": v} for k, v in STRATEGY_NAMES.items()],
+    })
 
 
 @app.route("/api/alerts", methods=["GET", "POST"])
