@@ -47,11 +47,11 @@ def load() -> dict:
             state = json.load(f)
 
     changed = False
-    # One-time safe migration: the old EMA/RSI default produced poor backtest
-    # results. Preserve an explicitly chosen strategy after this migration.
+    # Single-strategy migration: remove old persisted choices safely.
+    if state.get("strategy") != "guarded":
+        state["strategy"] = "guarded"
+        changed = True
     if not state.get("strategy_migrated_v2"):
-        if state.get("strategy", "eureka") == "eureka":
-            state["strategy"] = "guarded"
         state["strategy_migrated_v2"] = True
         changed = True
     for k, v in _DEFAULT_STATE.items():
