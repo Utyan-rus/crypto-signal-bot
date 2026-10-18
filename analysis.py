@@ -431,7 +431,7 @@ def backtest(df: pd.DataFrame, lookback: int = 60, horizon: int = 24,
     rules — not a prediction, and no guarantee future performance will
     look similar.
     """
-    func = STRATEGIES.get(strategy, analyze_eureka)
+    func = STRATEGIES.get(strategy, analyze_guarded)
     results = {"LONG": {"count": 0, "wins": 0}, "SHORT": {"count": 0, "wins": 0}}
     close = df["close"]
     n = len(df)
