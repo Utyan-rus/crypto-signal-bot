@@ -23,8 +23,8 @@ class ResearchExecutionTests(unittest.TestCase):
             row["t"]: ("LONG", 0.5, 2.0) for row in candles
         }
         result = simulate("TEST-PERP", candles, "test", cooldown_bars=0, fresh_signals=False)
-        # First position exits on candle index 2; any next entry must be later than that candle.
-        self.assertGreaterEqual(result["trades"], 2)
+        # One stop-loss on candle index 2, then one final close; no second stop on that same candle.
+        self.assertEqual(result["trades"], 2)
 
     @patch("strategy_research.signal_map")
     def test_fresh_signal_mode_avoids_repeated_entries_for_persistent_signal(self, mock_signal_map):
