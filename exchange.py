@@ -21,7 +21,15 @@ class ExchangeClient:
         """
         raw = self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
         df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+        # CCXT commonly includes the currently forming candle. Never let a live
+        # signal use an unfinished bar; it can repaint before the interval closes.
+        if len(df) > 1:
+            timeframe_ms = self.exchange.parse_timeframe(timeframe) * 1000
+            now_ms = self.exchange.milliseconds()
+            last_ms = int(raw[-1][0])
+            if last_ms + timeframe_ms > now_ms:
+                df = df.iloc[:-1].copy()
         return df
 
     def fetch_funding_rate(self, symbol: str):
