@@ -104,7 +104,7 @@ WELCOME_TEXT = (
 @require_auth
 async def strategy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = storage.load()
-    current = state.get("strategy", "eureka")
+    current = state.get("strategy", "guarded")
 
     if not context.args:
         lines = [f"Текущая стратегия: *{STRATEGY_NAMES[current]}* (`{current}`)\n"]
@@ -177,8 +177,8 @@ async def analyze_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Смотрю {symbol} ({timeframe}, стратегия {STRATEGY_NAMES[strategy]})…")
 
     try:
-        df = client.fetch_ohlcv(symbol, timeframe=timeframe, limit=200)
-        if len(df) < 60:
+        df = client.fetch_ohlcv(symbol, timeframe=timeframe, limit=260)
+        if len(df) < 220:
             await update.message.reply_text("Недостаточно данных по этой паре/таймфрейму.")
             return
 
