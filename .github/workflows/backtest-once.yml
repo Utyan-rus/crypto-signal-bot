@@ -1,0 +1,31 @@
+name: One-time 90-day paper backtest
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".run-backtest-once"
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    if: github.event.head_commit.message == 'Run paper backtest once'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run conservative 90-day backtest
+        run: python backtest.py --days 90 --max-markets 10 --min-notional 1.0 --out backtest-results
+      - name: Upload paper results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-signal-bot-backtest-once
+          path: backtest-results/
+          if-no-files-found: warn
+          retention-days: 30
