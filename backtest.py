@@ -313,7 +313,7 @@ def backtest(symbol, candles5, candles15, start_balance=5.0, risk_fraction=0.005
                "model": "guarded trend filter; each market simulated independently",
                "risk_fraction_pct": risk_fraction * 100, "leverage_cap": leverage, "min_notional": min_notional,
                "net_pnl": round(balance-start_balance, 8), "return_pct": round(100*(balance/start_balance-1), 3),
-               "max_drawdown_pct": round(max_dd*100, 3), "fees": "estimated taker 0.05% per side",
+               "max_drawdown_pct": round(max_dd*100, 3), "fees": "estimated taker 0.05% per side; deducted from trade PnL",
                "slippage": "estimated 0.05% per side", "funding": "NOT included; historical funding feed not implemented"}
     return trades, summary
 
