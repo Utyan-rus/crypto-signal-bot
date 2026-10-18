@@ -264,7 +264,7 @@ async def mtf_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def backtest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
-            "Использование: /backtest BTC/USDT [таймфрейм] [кол-во свечей] [eureka|yabloko]"
+            "Использование: /backtest BTC/USDT [таймфрейм] [кол-во свечей] [guarded|eureka|yabloko]"
         )
         return
     symbol = context.args[0].upper()
