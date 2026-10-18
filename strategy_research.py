@@ -106,14 +106,16 @@ def signal_map(candles, strategy):
     return signals
 
 
-def simulate(symbol, candles, strategy):
+def simulate(symbol, candles, strategy, cooldown_bars=0, fresh_signals=False):
     signals = signal_map(candles, strategy)
     balance = peak = START_BALANCE
     max_dd = 0.0
     trades = []
     pos = None
+    last_exit_index = -10**9
     for i in range(1, len(candles)):
         prev, bar = candles[i-1], candles[i]
+        closed_this_bar = False
         if pos:
             exit_price, reason = None, None
             if pos["side"] == "LONG":
@@ -137,9 +139,15 @@ def simulate(symbol, candles, strategy):
                 peak=max(peak,balance)
                 max_dd=max(max_dd,(peak-balance)/peak if peak>0 else 1.0)
                 pos=None
+                last_exit_index = i
+                closed_this_bar = True
         # Signals known only after prev candle closes; enter at current open.
         sig = signals.get(prev["t"])
-        if pos is None and sig and balance > 0:
+        # Fresh-signal mode enters only on the first bar of a new directional signal run.
+        previous_sig = signals.get(candles[i-2]["t"]) if i >= 2 else None
+        is_fresh = bool(sig and (not previous_sig or previous_sig[0] != sig[0]))
+        if (pos is None and not closed_this_bar and i-last_exit_index > cooldown_bars
+                and sig and balance > 0 and (not fresh_signals or is_fresh)):
             side, stop_distance, rr = sig
             entry = bar["o"]*(1+SLIPPAGE if side=="LONG" else 1-SLIPPAGE)
             qty = min(balance*RISK_FRACTION/(stop_distance+entry*2*(FEE+SLIPPAGE)),
@@ -168,6 +176,7 @@ def simulate(symbol, candles, strategy):
             peak=max(peak,balance)
             max_dd=max(max_dd,(peak-balance)/peak if peak>0 else 1.0)
             pos=None
+            last_exit_index = i
     if pos:
         bar=candles[-1]
         exit_price=bar["c"]*(1-SLIPPAGE if pos["side"]=="LONG" else 1+SLIPPAGE)
@@ -211,8 +220,10 @@ def main():
     markets=get_markets()
     if args.max_markets>0: markets=markets[:args.max_markets]
     end=int(time.time()); start=end-90*86400
-    results=[]; failures=[]; trades_all=[]
-    print(f"Comparing {len(STRATEGIES)} strategies on {len(markets)} markets: 60d train / 30d holdout.")
+    results=[]; failures=[]
+    configs=[("every_signal",0,False),("every_signal",6,False),
+             ("fresh_signal",0,True),("fresh_signal",6,True)]
+    print(f"Comparing {len(STRATEGIES)} strategies x {len(configs)} entry controls on {len(markets)} markets: 60d train / 30d holdout.")
     for n,market in enumerate(markets,1):
         symbol=market["symbol"]
         print(f"[{n}/{len(markets)}] {symbol}")
@@ -228,20 +239,21 @@ def main():
                 continue
             train,test=split
             for strategy in STRATEGIES:
-                train_result=simulate(symbol,train,strategy)
-                test_result=simulate(symbol,test,strategy)
-                row={"symbol":symbol,"strategy":strategy,"status":test_result["status"],
-                     "train_trades":train_result["trades"],"train_return_pct":train_result["return_pct"],
-                     "train_max_drawdown_pct":train_result["max_drawdown_pct"],
-                     "test_trades":test_result["trades"],"test_wins":test_result["wins"],
-                     "test_win_rate_pct":test_result["win_rate_pct"],"test_return_pct":test_result["return_pct"],
-                     "test_max_drawdown_pct":test_result["max_drawdown_pct"],"test_profit_factor":test_result["profit_factor"],
-                     "test_start_balance":START_BALANCE,"test_end_balance":test_result["end_balance"],
-                     "fees_per_side_pct":FEE*100,"slippage_per_side_pct":SLIPPAGE*100,
-                     "funding":"not included"}
-                results.append(row)
-                trades_all.extend(simulate(symbol,test,strategy).get("trades_detail",[]))
-                print(f"  {strategy}: train {train_result['return_pct']:+.2f}%, OOS {test_result['return_pct']:+.2f}% ({test_result['trades']} trades, DD {test_result['max_drawdown_pct']:.2f}%)")
+                for entry_mode,cooldown_bars,fresh in configs:
+                    train_result=simulate(symbol,train,strategy,cooldown_bars,fresh)
+                    test_result=simulate(symbol,test,strategy,cooldown_bars,fresh)
+                    row={"symbol":symbol,"strategy":strategy,"entry_mode":entry_mode,
+                         "cooldown_bars":cooldown_bars,"status":test_result["status"],
+                         "train_trades":train_result["trades"],"train_return_pct":train_result["return_pct"],
+                         "train_max_drawdown_pct":train_result["max_drawdown_pct"],
+                         "test_trades":test_result["trades"],"test_wins":test_result["wins"],
+                         "test_win_rate_pct":test_result["win_rate_pct"],"test_return_pct":test_result["return_pct"],
+                         "test_max_drawdown_pct":test_result["max_drawdown_pct"],"test_profit_factor":test_result["profit_factor"],
+                         "test_start_balance":START_BALANCE,"test_end_balance":test_result["end_balance"],
+                         "fees_per_side_pct":FEE*100,"slippage_per_side_pct":SLIPPAGE*100,
+                         "funding":"not included"}
+                    results.append(row)
+                    print(f"  {strategy}/{entry_mode}/cooldown={cooldown_bars}: train {train_result['return_pct']:+.2f}%, OOS {test_result['return_pct']:+.2f}% ({test_result['trades']} trades, DD {test_result['max_drawdown_pct']:.2f}%)")
         except Exception as exc:
             failures.append({"symbol":symbol,"error":type(exc).__name__+": "+str(exc)[:180]})
             print(f"  FAILED: {type(exc).__name__}: {str(exc)[:180]}")
@@ -256,5 +268,5 @@ def main():
     tested=[r for r in results if r.get("test_trades",0)>=5]
     profitable=[r for r in tested if r["test_return_pct"]>0]
     print(f"Finished: {len(tested)} market/strategy holdouts; {len(profitable)} positive after estimated fees/slippage; {len(failures)} API failures.")
-    print("Research only. Funding excluded; guarded baseline is an OHLCV approximation, not an exact live-strategy clone. No orders placed.")
+    print("Research only. Existing-position exits block re-entry on the same candle. Fresh-signal mode prevents repeated entries while a signal remains continuously active; cooldown is measured in 5m bars. Funding excluded; guarded baseline is an OHLCV approximation, not an exact live-strategy clone. No orders placed.")
 if __name__=="__main__": main()
