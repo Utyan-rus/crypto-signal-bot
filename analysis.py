@@ -168,16 +168,21 @@ def analyze_eureka(df: pd.DataFrame, order_book_imbalance: float = 0.0,
             score += 1
             reasons.append(f"Funding rate negative ({funding_rate:.4%}) — shorts crowded/expensive")
 
-    # Direction + confidence
+    # Direction + confidence.
+    # Trend (EMA20 vs EMA50) is a hard gate, not just one vote among several:
+    # a LONG only fires with the trend up, a SHORT only with the trend down.
+    # Without this, an oversold RSI / lower-Bollinger touch could outvote the
+    # trend and produce a LONG signal straight into a downtrend ("catching a
+    # falling knife") — that was the main failure mode in backtests.
     max_score = 8
     confidence = min(100, int(abs(score) / max_score * 100))
-    if score >= 2:
+    if score >= 2 and ema_fast > ema_slow:
         direction = "LONG"
-    elif score <= -2:
+    elif score <= -2 and ema_fast < ema_slow:
         direction = "SHORT"
     else:
         direction = "NEUTRAL"
-        confidence = min(confidence, 40)  # cap confidence when signal is weak/mixed
+        confidence = min(confidence, 40)  # cap confidence when signal is weak/mixed/against trend
 
     # Risk level from volatility (ATR as % of price)
     atr_pct = (atr_val / last_price) * 100 if last_price else 0
@@ -242,24 +247,25 @@ def analyze_yabloko(df: pd.DataFrame, order_book_imbalance: float = 0.0,
 
     breakout_up = last_price > last_upper
     breakout_down = last_price < last_lower
+    di_bullish = last_plus_di > last_minus_di if pd.notna(last_plus_di) and pd.notna(last_minus_di) else None
 
-    if breakout_up:
+    # A breakout only counts if +DI/-DI agree with its direction — an upside
+    # breakout while -DI still dominates is treated as noise/a fakeout, not
+    # a valid signal, instead of just being one vote among several.
+    if breakout_up and di_bullish is True:
         score += 2
-        reasons.append(f"Пробой 20-периодного максимума ({last_upper:.4f})")
-    elif breakout_down:
+        reasons.append(f"Пробой 20-периодного максимума ({last_upper:.4f}), подтверждён +DI")
+    elif breakout_down and di_bullish is False:
         score -= 2
-        reasons.append(f"Пробой 20-периодного минимума ({last_lower:.4f})")
+        reasons.append(f"Пробой 20-периодного минимума ({last_lower:.4f}), подтверждён -DI")
+    elif breakout_up or breakout_down:
+        reasons.append("Пробой есть, но направление не подтверждено DI — считаем фейковым")
     else:
         reasons.append("Цена внутри 20-периодного канала — пробоя нет")
 
     if pd.notna(last_adx):
         if last_adx > 25:
-            if last_plus_di > last_minus_di:
-                score += 1
-                reasons.append(f"ADX {last_adx:.1f} — сильный тренд, +DI доминирует")
-            else:
-                score -= 1
-                reasons.append(f"ADX {last_adx:.1f} — сильный тренд, -DI доминирует")
+            reasons.append(f"ADX {last_adx:.1f} — рынок трендовый")
         elif last_adx < 15:
             reasons.append(f"ADX {last_adx:.1f} — рынок плоский, сигнал менее надёжен")
             score = int(score * 0.5)
@@ -286,7 +292,7 @@ def analyze_yabloko(df: pd.DataFrame, order_book_imbalance: float = 0.0,
             score += 1
             reasons.append(f"Funding отрицательный ({funding_rate:.4%}) — шорты перегружены")
 
-    max_score = 6
+    max_score = 5
     confidence = min(100, int(abs(score) / max_score * 100))
     if score >= 2:
         direction = "LONG"
