@@ -32,7 +32,7 @@ def max_drawdown(equity_path):
 
 
 def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fresh,
-                 fee_rate, slippage_rate):
+                 fee_rate, slippage_rate, exit_mode="fixed_rr", max_hold_bars=0):
     balance = base.START_BALANCE
     pos = None
     last_exit = -10**9
@@ -45,6 +45,12 @@ def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fr
         closed = False
         if pos:
             exit_price, reason = None, None
+            # Use only the previous completed bar's favorable extreme to update a trailing stop.
+            if exit_mode == "trailing_1r" and pos.get("best_price") is not None:
+                if pos["side"] == "LONG":
+                    pos["stop"] = max(pos["stop"], pos["best_price"] - pos["stop_distance"])
+                else:
+                    pos["stop"] = min(pos["stop"], pos["best_price"] + pos["stop_distance"])
             if pos["side"] == "LONG":
                 if bar["l"] <= pos["stop"]:
                     exit_price, reason = pos["stop"], "SL"
@@ -55,6 +61,8 @@ def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fr
                     exit_price, reason = pos["stop"], "SL"
                 elif bar["l"] <= pos["target"]:
                     exit_price, reason = pos["target"], "TP"
+            if exit_price is None and max_hold_bars and i - pos["entry_index"] >= max_hold_bars:
+                exit_price, reason = bar["c"], "TIME"
             if exit_price is not None:
                 exit_price *= (1 - slippage_rate if pos["side"] == "LONG" else 1 + slippage_rate)
                 gross = pos["qty"] * (exit_price - pos["entry"]) * (1 if pos["side"] == "LONG" else -1)
@@ -64,6 +72,10 @@ def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fr
                 pos = None
                 last_exit = i
                 closed = True
+            elif pos:
+                # Update favorable excursion only after deciding this bar's exits.
+                pos["best_price"] = (max(pos["best_price"], bar["h"]) if pos["side"] == "LONG"
+                                     else min(pos["best_price"], bar["l"]))
 
         sig = signals.get(prev["t"])
         prevprev = signals.get(candles[i-2]["t"]) if i >= 2 else None
@@ -79,7 +91,8 @@ def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fr
                 stop = entry - stop_distance if side == "LONG" else entry + stop_distance
                 target = entry + stop_distance * rr if side == "LONG" else entry - stop_distance * rr
                 pos = {"side": side, "entry": entry, "qty": qty, "stop": stop,
-                       "target": target, "entry_fee": qty * entry * fee_rate}
+                       "target": target, "entry_fee": qty * entry * fee_rate,
+                       "entry_index": i, "stop_distance": stop_distance, "best_price": entry}
                 # Conservative intrabar convention: stop takes precedence if both levels hit.
                 if side == "LONG":
                     reason = "SL" if bar["l"] <= stop else ("TP" if bar["h"] >= target else None)
@@ -118,7 +131,8 @@ def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fr
     gross_profit = sum(t["pnl"] for t in trades if t["pnl"] > 0)
     gross_loss = -sum(t["pnl"] for t in trades if t["pnl"] < 0)
     return {
-        "symbol": symbol, "strategy": strategy, "trades": len(trades), "wins": wins,
+        "symbol": symbol, "strategy": strategy, "exit_mode": exit_mode,
+        "max_hold_bars": max_hold_bars, "trades": len(trades), "wins": wins,
         "win_rate_pct": round(100 * wins / len(trades), 2) if trades else 0.0,
         "start_balance": base.START_BALANCE, "end_balance": round(balance, 6),
         "return_pct": round(100 * (balance / base.START_BALANCE - 1), 3),
@@ -157,18 +171,21 @@ def main():
             all_signals = {k: v for k, v in base.signal_map(candles, "rsi_bollinger").items()}
             for strategy in base.STRATEGIES:
                 signals = all_signals if strategy == "rsi_bollinger" else base.signal_map(candles, strategy)
-                for mode, cooldown, fresh in (("every_signal", 0, False),
-                                              ("every_signal", 6, False),
-                                              ("fresh_signal", 0, True),
-                                              ("fresh_signal", 6, True)):
-                    for cost_name, fee, slip in COST_SCENARIOS:
-                        row = simulate_oos(symbol, candles, signals, holdout_start, strategy,
-                                           cooldown, fresh, fee, slip)
-                        row.update({"entry_mode": mode, "cooldown_bars": cooldown,
-                                    "cost_scenario": cost_name, "fee_per_side_pct": fee*100,
-                                    "slippage_per_side_pct": slip*100,
-                                    "indicator_context": "full 90d; entries gated to final 30d"})
-                        results.append(row)
+                for mode, cooldown, fresh in (("fresh_signal", 6, True),):
+                    # Hold entry rules constant while isolating exit management.
+                    exit_variants = (("fixed_rr", 0), ("time_12_bars", 12),
+                                     ("time_24_bars", 24), ("time_48_bars", 48),
+                                     ("trailing_1r", 0))
+                    for exit_mode, max_hold in exit_variants:
+                        for cost_name, fee, slip in COST_SCENARIOS:
+                            row = simulate_oos(symbol, candles, signals, holdout_start, strategy,
+                                               cooldown, fresh, fee, slip, exit_mode, max_hold)
+                            row.update({"entry_mode": mode, "cooldown_bars": cooldown,
+                                        "cost_scenario": cost_name, "fee_per_side_pct": fee*100,
+                                        "slippage_per_side_pct": slip*100,
+                                        "indicator_context": "full 90d; entries gated to final 30d",
+                                        "funding": "excluded; funding stress still required"})
+                            results.append(row)
             time.sleep(0.15)
         except Exception as exc:
             failures.append({"symbol": symbol, "error": type(exc).__name__ + ": " + str(exc)[:180]})
