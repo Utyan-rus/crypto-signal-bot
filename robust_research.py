@@ -32,7 +32,8 @@ def max_drawdown(equity_path):
 
 
 def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fresh,
-                 fee_rate, slippage_rate, exit_mode="fixed_rr", max_hold_bars=0):
+                 fee_rate, slippage_rate, exit_mode="fixed_rr", max_hold_bars=0,
+                 funding_rate_8h=0.0):
     balance = base.START_BALANCE
     pos = None
     last_exit = -10**9
@@ -66,7 +67,7 @@ def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fr
             if exit_price is not None:
                 exit_price *= (1 - slippage_rate if pos["side"] == "LONG" else 1 + slippage_rate)
                 gross = pos["qty"] * (exit_price - pos["entry"]) * (1 if pos["side"] == "LONG" else -1)
-                pnl = gross - abs(pos["qty"] * exit_price) * fee_rate - pos["entry_fee"]
+                pnl = gross - abs(pos["qty"] * exit_price) * fee_rate - pos["entry_fee"] - pos.get("funding_paid", 0.0) - pos.get("funding_paid", 0.0)
                 balance += pnl
                 trades.append({"symbol": symbol, "strategy": strategy, "pnl": pnl, "reason": reason})
                 pos = None
@@ -76,6 +77,9 @@ def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fr
                 # Update favorable excursion only after deciding this bar's exits.
                 pos["best_price"] = (max(pos["best_price"], bar["h"]) if pos["side"] == "LONG"
                                      else min(pos["best_price"], bar["l"]))
+            if pos and funding_rate_8h > 0 and (i - pos["entry_index"]) > 0 and (i - pos["entry_index"]) % 96 == 0:
+                # Conservative stress: charge a cost regardless of side; not historical funding data.
+                pos["funding_paid"] = pos.get("funding_paid", 0.0) + abs(pos["qty"] * bar["c"]) * funding_rate_8h
 
         sig = signals.get(prev["t"])
         prevprev = signals.get(candles[i-2]["t"]) if i >= 2 else None
@@ -92,7 +96,8 @@ def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fr
                 target = entry + stop_distance * rr if side == "LONG" else entry - stop_distance * rr
                 pos = {"side": side, "entry": entry, "qty": qty, "stop": stop,
                        "target": target, "entry_fee": qty * entry * fee_rate,
-                       "entry_index": i, "stop_distance": stop_distance, "best_price": entry}
+                       "entry_index": i, "stop_distance": stop_distance, "best_price": entry,
+                       "funding_paid": 0.0}
                 # Conservative intrabar convention: stop takes precedence if both levels hit.
                 if side == "LONG":
                     reason = "SL" if bar["l"] <= stop else ("TP" if bar["h"] >= target else None)
@@ -115,7 +120,7 @@ def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fr
             mark = bar["c"]
             unrealized = pos["qty"] * (mark - pos["entry"]) * (1 if pos["side"] == "LONG" else -1)
             estimated_exit_cost = abs(pos["qty"] * mark) * (fee_rate + slippage_rate)
-            equity += unrealized - pos["entry_fee"] - estimated_exit_cost
+            equity += unrealized - pos["entry_fee"] - estimated_exit_cost - pos.get("funding_paid", 0.0)
         equity_path.append(equity)
 
     if pos:
@@ -137,6 +142,7 @@ def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fr
         "start_balance": base.START_BALANCE, "end_balance": round(balance, 6),
         "return_pct": round(100 * (balance / base.START_BALANCE - 1), 3),
         "max_drawdown_mtm_pct": round(max_drawdown(equity_path), 3),
+        "funding_stress_rate_per_8h_pct": round(funding_rate_8h * 100, 4),
         "profit_factor": round(gross_profit / gross_loss, 3) if gross_loss else (999.0 if gross_profit else None),
         "funding": "excluded; historical funding series not integrated",
         "status": "tested" if len(trades) >= 5 else "low_sample",
@@ -178,14 +184,19 @@ def main():
                                      ("trailing_1r", 0))
                     for exit_mode, max_hold in exit_variants:
                         for cost_name, fee, slip in COST_SCENARIOS:
-                            row = simulate_oos(symbol, candles, signals, holdout_start, strategy,
-                                               cooldown, fresh, fee, slip, exit_mode, max_hold)
-                            row.update({"entry_mode": mode, "cooldown_bars": cooldown,
-                                        "cost_scenario": cost_name, "fee_per_side_pct": fee*100,
-                                        "slippage_per_side_pct": slip*100,
-                                        "indicator_context": "full 90d; entries gated to final 30d",
-                                        "funding": "excluded; funding stress still required"})
-                            results.append(row)
+                            for funding_name, funding_rate in (("no_funding", 0.0),
+                                                               ("funding_0.01pct_8h", 0.0001),
+                                                               ("funding_0.03pct_8h", 0.0003)):
+                                row = simulate_oos(symbol, candles, signals, holdout_start, strategy,
+                                                   cooldown, fresh, fee, slip, exit_mode, max_hold,
+                                                   funding_rate)
+                                row.update({"entry_mode": mode, "cooldown_bars": cooldown,
+                                            "cost_scenario": cost_name, "funding_scenario": funding_name,
+                                            "fee_per_side_pct": fee*100,
+                                            "slippage_per_side_pct": slip*100,
+                                            "indicator_context": "full 90d; entries gated to final 30d",
+                                            "funding": "synthetic adverse stress charged per 96 bars; not historical funding"})
+                                results.append(row)
             time.sleep(0.15)
         except Exception as exc:
             failures.append({"symbol": symbol, "error": type(exc).__name__ + ": " + str(exc)[:180]})
