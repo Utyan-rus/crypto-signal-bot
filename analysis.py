@@ -414,13 +414,13 @@ STRATEGY_NAMES = {"guarded": "Фильтр-тренд", "eureka": "Эврика"
 
 
 def analyze(df: pd.DataFrame, order_book_imbalance: float = 0.0,
-            funding_rate: float | None = None, strategy: str = "eureka") -> Signal:
+            funding_rate: float | None = None, strategy: str = "guarded") -> Signal:
     func = STRATEGIES.get(strategy, analyze_eureka)
     return func(df, order_book_imbalance=order_book_imbalance, funding_rate=funding_rate)
 
 
 def backtest(df: pd.DataFrame, lookback: int = 60, horizon: int = 24,
-             strategy: str = "eureka") -> dict:
+             strategy: str = "guarded") -> dict:
     """
     Retrospective check: walks a rolling window through the given candles,
     recomputes this same rule-based signal at each point using only data
