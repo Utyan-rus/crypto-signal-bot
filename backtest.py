@@ -219,8 +219,9 @@ def backtest(symbol, candles5, candles15, start_balance=5.0, risk_fraction=0.005
     # Trade on next 5m candle open to avoid look-ahead bias.
     for i in range(1, len(candles5)):
         prev, bar = candles5[i - 1], candles5[i]
-        t = prev["t"]
-        while j15 + 1 < len(times15) and times15[j15 + 1] <= t:
+        # Only use 15m candles fully closed by the time the previous 5m bar closes.
+        t_close = prev["t"] + 300
+        while j15 + 1 < len(times15) and times15[j15 + 1] + 900 <= t_close:
             j15 += 1
         trend = s15[times15[j15]][0] if j15 >= 0 else "NEUTRAL"
         sig_data = s5.get(t, ("NEUTRAL", 0, 0, 0))
@@ -270,6 +271,30 @@ def backtest(symbol, candles5, candles15, start_balance=5.0, risk_fraction=0.005
             entry_fee = qty * entry * fee_rate
             pos = {"side": side, "entry": entry, "qty": qty, "stop": stop, "target": target,
                    "entry_fee": entry_fee, "entry_time": bar["t"]}
+            # Check the entry candle too; otherwise same-bar stop/target hits are omitted.
+            same_bar_exit, same_bar_reason = None, None
+            if side == "LONG":
+                if bar["l"] <= stop:
+                    same_bar_exit, same_bar_reason = stop, "SL"
+                elif bar["h"] >= target:
+                    same_bar_exit, same_bar_reason = target, "TP"
+            else:
+                if bar["h"] >= stop:
+                    same_bar_exit, same_bar_reason = stop, "SL"
+                elif bar["l"] <= target:
+                    same_bar_exit, same_bar_reason = target, "TP"
+            if same_bar_exit is not None:
+                same_bar_exit *= (1 - slippage_rate if side == "LONG" else 1 + slippage_rate)
+                gross = qty * (same_bar_exit - entry) * (1 if side == "LONG" else -1)
+                pnl = gross - abs(qty * same_bar_exit) * fee_rate - entry_fee
+                balance += pnl
+                peak = max(peak, balance)
+                max_dd = max(max_dd, (peak - balance) / peak if peak > 0 else 1.0)
+                trades.append({"symbol": symbol, "side": side, "entry_time": bar["t"],
+                               "exit_time": bar["t"], "entry": round(entry, 10),
+                               "exit": round(same_bar_exit, 10), "qty": round(qty, 10),
+                               "reason": same_bar_reason, "pnl": round(pnl, 8), "balance": round(balance, 8)})
+                pos = None
     if pos:
         bar = candles5[-1]
         exit_price = bar["c"] * (1 - slippage_rate if pos["side"] == "LONG" else 1 + slippage_rate)
