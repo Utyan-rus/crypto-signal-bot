@@ -1,6 +1,10 @@
 name: Lighter 90-day paper backtest
 
 on:
+  push:
+    paths:
+      - "backtest.py"
+      - ".github/workflows/backtest.yml"
   workflow_dispatch:
     inputs:
       days:
@@ -29,7 +33,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run conservative paper backtest
-        run: python backtest.py --days "${{ inputs.days }}" --max-markets "${{ inputs.max_markets }}" --min-notional 1.0 --out backtest-results
+        run: python backtest.py --days "${{ inputs.days || '90' }}" --max-markets "${{ inputs.max_markets || '10' }}" --min-notional 1.0 --out backtest-results
       - name: Upload results, including incomplete-history flags
         if: always()
         uses: actions/upload-artifact@v4
