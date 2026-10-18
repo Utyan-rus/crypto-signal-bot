@@ -32,6 +32,7 @@ from functools import wraps
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
 from telegram.ext import Application, CommandHandler, ContextTypes
+import asyncio
 
 from exchange import ExchangeClient
 from analysis import analyze, backtest, STRATEGY_NAMES
@@ -94,7 +95,8 @@ WELCOME_TEXT = (
     "/alert BTC/USDT > 70000 — ценовой алерт, /alerts, /unalert id\n"
     "/panel — панель со списком активов (там же калькулятор риска, MTF, бэктест, алерты)\n"
     "/addcoin BTC/USDT, /removecoin BTC/USDT, /coins — монеты в панели\n"
-    "/strategy [eureka|yabloko] — показать/переключить активную стратегию\n\n"
+    "/strategy [guarded|eureka|yabloko] — показать/переключить стратегию\n"
+    "/scan [число рынков] — сканер Lighter 5m/15m (только PAPER)\n\n"
     "Я не торгую за тебя и не имею доступа к твоему кошельку."
 )
 
@@ -350,16 +352,32 @@ async def risk_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Не удалось посчитать дистанцию до стопа.")
             return
 
-        position_size = risk_amount / stop_distance
+        # Approximate all-in risk: stop distance plus entry/exit fees and slippage.
+        fee_rate = float(os.getenv("PAPER_FEE_RATE", "0.0005"))
+        slippage_rate = float(os.getenv("PAPER_SLIPPAGE_RATE", "0.0005"))
+        max_leverage = max(1.0, min(float(os.getenv("PAPER_MAX_LEVERAGE", "3")), 3.0))
+        min_notional = max(0.0, float(os.getenv("PAPER_MIN_NOTIONAL", "1.0")))
+        risk_per_unit = stop_distance + signal.entry * 2 * (fee_rate + slippage_rate)
+        if risk_per_unit <= 0 or signal.entry <= 0:
+            await update.message.reply_text("Не удалось безопасно посчитать размер позиции.")
+            return
+        position_size = min(risk_amount / risk_per_unit, balance * max_leverage / signal.entry)
         position_value = position_size * signal.entry
+        if position_value < min_notional:
+            await update.message.reply_text(
+                f"{symbol}: пропуск. Минимальный расчётный объём \${min_notional:.2f} превышает доступный объём "
+                f"при лимите риска \${risk_amount:.4f}. Риск не увеличиваю."
+            )
+            return
         base_asset = symbol.split("/")[0]
 
         msg = (
             f"*{symbol}* — расчёт размера позиции ({signal.direction}, {STRATEGY_NAMES[strategy]})\n\n"
-            f"Риск на сделку: ${risk_amount:.2f} ({risk_pct}% от ${balance:.2f})\n"
+            f"Риск-лимит: ${risk_amount:.4f} ({risk_pct}% от ${balance:.2f})\n"
+            f"Учтены оценки комиссий/проскальзывания; плечо ограничено {max_leverage:.1f}x\n"
             f"Цена входа: {signal.entry:.4f}\n"
             f"Стоп-лосс (ориентир): {signal.stop_loss:.4f} (дистанция {stop_distance:.4f})\n\n"
-            f"Размер позиции: {position_size:.6f} {base_asset}\n"
+            f"Размер позиции: {position_size:.8f} {base_asset}\n"
             f"Объём в $: ${position_value:.2f}\n\n"
             f"Это математика под твой риск на сделку, не рекомендация по плечу — "
             f"сколько плеча использовать, решаешь сам."
@@ -518,6 +536,26 @@ async def check_price_alerts(context: ContextTypes.DEFAULT_TYPE):
         storage.save(state)
 
 
+
+
+@require_auth
+async def scan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Run a bounded public-data Lighter scan without changing the Railway service."""
+    try:
+        count = int(context.args[0]) if context.args else 15
+    except ValueError:
+        count = 15
+    count = max(1, min(count, 40))
+    status = await update.message.reply_text(f"Сканирую до {count} рынков Lighter по закрытым свечам 5m/15m…")
+    try:
+        from lighter_scan import scan_lighter_markets, format_report
+        report = await asyncio.to_thread(scan_lighter_markets, count)
+        await status.edit_text(format_report(report)[:3900])
+    except Exception as exc:
+        log.exception("Lighter scan failed")
+        await status.edit_text(f"Сканер Lighter не завершён: {type(exc).__name__}. Повтори позже. Реальные ордера не размещались.")
+
+
 # --------------------------------------------------------------- panel ----
 
 async def refresh_one_symbol(symbol: str):
@@ -649,6 +687,7 @@ def main():
     app.add_handler(CommandHandler("removecoin", removecoin_cmd))
     app.add_handler(CommandHandler("coins", coins_cmd))
     app.add_handler(CommandHandler("strategy", strategy_cmd))
+    app.add_handler(CommandHandler("scan", scan_cmd))
 
     if app.job_queue:
         app.job_queue.run_repeating(check_watchlist, interval=CHECK_INTERVAL_SECONDS, first=30)
