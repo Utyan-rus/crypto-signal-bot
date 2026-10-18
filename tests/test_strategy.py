@@ -4,7 +4,7 @@ import unittest
 import pandas as pd
 
 from analysis import analyze, STRATEGIES
-from backtest import signal_series
+from backtest import backtest as run_paper_backtest, signal_series
 
 
 def candles(n=260, flat=True):
@@ -35,6 +35,15 @@ class GuardedStrategyTests(unittest.TestCase):
             "close": x["c"], "volume": x["v"]
         } for x in candles(flat=True)])
         self.assertEqual(analyze(frame, strategy="guarded").direction, "NEUTRAL")
+
+    def test_paper_backtest_runs_without_timestamp_errors(self):
+        candles5 = candles(n=260, flat=False)
+        base = candles5[0]["t"]
+        candles15 = [dict(row, t=base + i * 900) for i, row in enumerate(candles(n=100, flat=False))]
+        trades, summary = run_paper_backtest("TEST-PERP", candles5, candles15)
+        self.assertEqual(summary["status"], "ok")
+        self.assertGreaterEqual(summary["bars_5m"], 100)
+        self.assertIsInstance(trades, list)
 
     def test_backtest_signal_rows_include_atr_stop_distance(self):
         signals = signal_series(candles(flat=True))
