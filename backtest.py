@@ -224,7 +224,7 @@ def backtest(symbol, candles5, candles15, start_balance=5.0, risk_fraction=0.005
         while j15 + 1 < len(times15) and times15[j15 + 1] + 900 <= t_close:
             j15 += 1
         trend = s15[times15[j15]][0] if j15 >= 0 else "NEUTRAL"
-        sig_data = s5.get(t, ("NEUTRAL", 0, 0, 0))
+        sig_data = s5.get(prev["t"], ("NEUTRAL", 0, 0, 0))
         sig = sig_data[0]
         closed_this_bar = False
         if pos:
