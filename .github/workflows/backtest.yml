@@ -1,0 +1,40 @@
+name: Lighter 90-day paper backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "History length"
+        required: true
+        default: "90"
+        type: choice
+        options: ["30", "60", "90"]
+      max_markets:
+        description: "Markets to test (0 = all)"
+        required: true
+        default: "10"
+        type: choice
+        options: ["5", "10", "25", "0"]
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run conservative paper backtest
+        run: python backtest.py --days "${{ inputs.days }}" --max-markets "${{ inputs.max_markets }}" --min-notional 1.0 --out backtest-results
+      - name: Upload results, including incomplete-history flags
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-signal-bot-backtest
+          path: backtest-results/
+          if-no-files-found: warn
+          retention-days: 30
