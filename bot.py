@@ -45,6 +45,9 @@ DEFAULT_EXCHANGE = os.getenv("EXCHANGE_ID", "binance")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
+# python-telegram-bot/httpx INFO logs include the bot token in request URLs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.WARNING)
 
 client = ExchangeClient(DEFAULT_EXCHANGE)
 
