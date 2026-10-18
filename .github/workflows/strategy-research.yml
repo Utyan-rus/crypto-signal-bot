@@ -1,0 +1,39 @@
+name: Lighter walk-forward strategy research
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "strategy_research.py"
+      - ".github/workflows/strategy-research.yml"
+  workflow_dispatch:
+    inputs:
+      max_markets:
+        description: "Markets to test"
+        required: true
+        default: "5"
+        type: choice
+        options: ["5", "10", "25"]
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run walk-forward paper research
+        run: python strategy_research.py --days 90 --max-markets "${{ inputs.max_markets || '5' }}" --out strategy-research-results
+      - name: Upload research results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lighter-walk-forward-research
+          path: strategy-research-results/
+          if-no-files-found: warn
+          retention-days: 30
