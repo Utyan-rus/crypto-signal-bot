@@ -172,7 +172,7 @@ async def analyze_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbol = context.args[0].upper()
     timeframe = context.args[1] if len(context.args) > 1 else "1h"
     state = storage.load()
-    strategy = state.get("strategy", "eureka")
+    strategy = state.get("strategy", "guarded")
 
     await update.message.reply_text(f"Смотрю {symbol} ({timeframe}, стратегия {STRATEGY_NAMES[strategy]})…")
 
@@ -215,7 +215,7 @@ async def mtf_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     symbol = context.args[0].upper()
     state = storage.load()
-    strategy = state.get("strategy", "eureka")
+    strategy = state.get("strategy", "guarded")
     await update.message.reply_text(
         f"Смотрю {symbol} на {', '.join(MTF_TIMEFRAMES)} ({STRATEGY_NAMES[strategy]})…"
     )
@@ -223,8 +223,8 @@ async def mtf_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     results = {}
     for tf in MTF_TIMEFRAMES:
         try:
-            df = client.fetch_ohlcv(symbol, timeframe=tf, limit=200)
-            if len(df) < 60:
+            df = client.fetch_ohlcv(symbol, timeframe=tf, limit=260)
+            if len(df) < 220:
                 continue
             imbalance = client.fetch_order_book_imbalance(symbol)
             funding = client.fetch_funding_rate(symbol)
@@ -275,7 +275,7 @@ async def backtest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         limit = 500
 
     state = storage.load()
-    strategy = context.args[3].lower() if len(context.args) > 3 else state.get("strategy", "eureka")
+    strategy = context.args[3].lower() if len(context.args) > 3 else state.get("strategy", "guarded")
     if strategy not in STRATEGY_NAMES:
         await update.message.reply_text("Неизвестная стратегия. Доступно: " + ", ".join(STRATEGY_NAMES.keys()))
         return
@@ -329,11 +329,11 @@ async def risk_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     state = storage.load()
-    strategy = state.get("strategy", "eureka")
+    strategy = state.get("strategy", "guarded")
 
     try:
-        df = client.fetch_ohlcv(symbol, timeframe="1h", limit=200)
-        if len(df) < 60:
+        df = client.fetch_ohlcv(symbol, timeframe="1h", limit=260)
+        if len(df) < 220:
             await update.message.reply_text("Недостаточно данных по этой паре.")
             return
         imbalance = client.fetch_order_book_imbalance(symbol)
@@ -366,7 +366,7 @@ async def risk_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if position_value < min_notional:
             await update.message.reply_text(
                 f"{symbol}: пропуск. Минимальный расчётный объём ${min_notional:.2f} превышает доступный объём "
-                f"при лимите риска \${risk_amount:.4f}. Риск не увеличиваю."
+                f"при лимите риска ${risk_amount:.4f}. Риск не увеличиваю."
             )
             return
         base_asset = symbol.split("/")[0]
@@ -437,11 +437,11 @@ async def mywatches_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def check_watchlist(context: ContextTypes.DEFAULT_TYPE):
     """Runs periodically; pushes a message only when a watched pair has a strong signal."""
     state = storage.load()
-    strategy = state.get("strategy", "eureka")
+    strategy = state.get("strategy", "guarded")
     for chat_id_str, w in list(state["watchlist"].items()):
         try:
-            df = client.fetch_ohlcv(w["symbol"], timeframe=w["timeframe"], limit=200)
-            if len(df) < 60:
+            df = client.fetch_ohlcv(w["symbol"], timeframe=w["timeframe"], limit=260)
+            if len(df) < 220:
                 continue
             imbalance = client.fetch_order_book_imbalance(w["symbol"])
             funding = client.fetch_funding_rate(w["symbol"])
@@ -593,10 +593,10 @@ async def check_lighter_signals(context: ContextTypes.DEFAULT_TYPE):
 
 async def refresh_one_symbol(symbol: str):
     state = storage.load()
-    strategy = state.get("strategy", "eureka")
+    strategy = state.get("strategy", "guarded")
     try:
-        df = client.fetch_ohlcv(symbol, timeframe=PANEL_TIMEFRAME, limit=200)
-        if len(df) < 60:
+        df = client.fetch_ohlcv(symbol, timeframe=PANEL_TIMEFRAME, limit=260)
+        if len(df) < 220:
             return
         imbalance = client.fetch_order_book_imbalance(symbol)
         funding = client.fetch_funding_rate(symbol)
