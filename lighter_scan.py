@@ -65,7 +65,12 @@ def list_markets():
         if base in excluded or (base.startswith("USD") and len(base) == 6):
             continue
         out.append({"id": int(market_id), "symbol": str(symbol)})
-    return sorted(out, key=lambda x: x["symbol"])
+    priority = {"BTC": 0, "ETH": 1, "SOL": 2, "BNB": 3, "XRP": 4,
+                "DOGE": 5, "ADA": 6, "AVAX": 7, "LINK": 8, "LTC": 9}
+    def sort_key(item):
+        base = item["symbol"].upper().replace("-PERP", "").replace("/USDC", "").replace("/USDT", "")
+        return (priority.get(base, 100), item["symbol"])
+    return sorted(out, key=sort_key)
 
 def fetch_candles(market_id, resolution, count=260):
     now = int(time.time())
