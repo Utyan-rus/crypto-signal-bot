@@ -30,7 +30,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements.txt
-      - run: python -m unittest tests.test_robust_research -v
+      - run: python -m unittest discover -s tests -p 'test_robust_research.py' -v
       - name: Run robust paper research
         run: python robust_research.py --days 90 --max-markets "${{ inputs.max_markets || '5' }}" --out robust-research-results
       - uses: actions/upload-artifact@v4
