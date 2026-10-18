@@ -98,7 +98,7 @@ WELCOME_TEXT = (
     "/alert BTC/USDT > 70000 — ценовой алерт, /alerts, /unalert id\n"
     "/panel — панель со списком активов (там же калькулятор риска, MTF, бэктест, алерты)\n"
     "/addcoin BTC/USDT, /removecoin BTC/USDT, /coins — монеты в панели\n"
-    "/strategy [guarded|eureka|yabloko] — показать/переключить стратегию\n"
+    "/strategy — показать активную стратегию «Фильтр-тренд»\n"
     "/scan [число рынков] — сканер Lighter 5m/15m (только PAPER)\n\n"
     "Я не торгую за тебя и не имею доступа к твоему кошельку."
 )
@@ -107,30 +107,17 @@ WELCOME_TEXT = (
 @require_auth
 async def strategy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = storage.load()
-    current = state.get("strategy", "guarded")
-
-    if not context.args:
-        lines = [f"Текущая стратегия: *{STRATEGY_NAMES[current]}* (`{current}`)\n"]
-        for key, name in STRATEGY_NAMES.items():
-            mark = "✅" if key == current else "▫️"
-            lines.append(f"{mark} {name} (`{key}`)")
-        lines.append(f"\nПереключить: /strategy {'yabloko' if current == 'eureka' else 'eureka'}")
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
-        return
-
-    choice = context.args[0].lower()
-    if choice not in STRATEGY_NAMES:
+    state["strategy"] = "guarded"
+    storage.save(state)
+    if context.args and context.args[0].lower() not in ("guarded",):
         await update.message.reply_text(
-            "Неизвестная стратегия. Доступно: " + ", ".join(STRATEGY_NAMES.keys())
+            "Старая стратегия удалена. Доступен только режим «Фильтр-тренд» (guarded)."
         )
         return
-
-    state["strategy"] = choice
-    storage.save(state)
     await update.message.reply_text(
-        f"Стратегия переключена на *{STRATEGY_NAMES[choice]}* (`{choice}`). "
-        f"Действует везде: /analyze, /watch, /panel, /mtf, /risk.",
-        parse_mode="Markdown",
+        "Активная стратегия: «Фильтр-тренд» (guarded). "
+        "Используется в анализе, панели, MTF, калькуляторе риска и бэктесте. "
+        "Реальные ордера не размещаются."
     )
 
 
@@ -267,7 +254,7 @@ async def mtf_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def backtest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
-            "Использование: /backtest BTC/USDT [таймфрейм] [кол-во свечей] [guarded|eureka|yabloko]"
+            "Использование: /backtest BTC/USDT [таймфрейм] [кол-во свечей]"
         )
         return
     symbol = context.args[0].upper()
@@ -278,10 +265,7 @@ async def backtest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         limit = 500
 
     state = storage.load()
-    strategy = context.args[3].lower() if len(context.args) > 3 else state.get("strategy", "guarded")
-    if strategy not in STRATEGY_NAMES:
-        await update.message.reply_text("Неизвестная стратегия. Доступно: " + ", ".join(STRATEGY_NAMES.keys()))
-        return
+    strategy = "guarded"
 
     await update.message.reply_text(
         f"Прогоняю бэктест по {symbol} ({timeframe}, {limit} свечей, {STRATEGY_NAMES[strategy]})…"
