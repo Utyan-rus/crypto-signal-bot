@@ -556,6 +556,39 @@ async def scan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status.edit_text(f"Сканер Lighter не завершён: {type(exc).__name__}. Повтори позже. Реальные ордера не размещались.")
 
 
+
+
+async def check_lighter_signals(context: ContextTypes.DEFAULT_TYPE):
+    """Periodic read-only scan; persist last directions to avoid repeat alerts."""
+    state = storage.load()
+    chats = list(state.get("authorized_chat_ids", []))
+    if not chats:
+        return
+    try:
+        from lighter_scan import scan_lighter_markets
+        report = await asyncio.to_thread(scan_lighter_markets, 10)
+        current = {s["symbol"]: s["direction"] for s in report["signals"]}
+        previous = state.get("lighter_last_signals", {})
+        new_signals = [s for s in report["signals"] if previous.get(s["symbol"]) != s["direction"]]
+        state["lighter_last_signals"] = current
+        storage.save(state)
+        for signal in new_signals[:10]:
+            msg = (
+                f"🔔 Новый сигнал Lighter PAPER: {signal['direction']} {signal['symbol']}\n"
+                f"Цена наблюдения: {signal['price']:.8g}\n"
+                f"Стоп ориентир: {signal['stop']:.8g}\n"
+                f"Тейк ориентир: {signal['target']:.8g}\n"
+                "Подтверждение закрытых 5m + 15m свечей. Реальный ордер не размещён."
+            )
+            for chat_id in chats:
+                try:
+                    await context.bot.send_message(chat_id=int(chat_id), text=msg)
+                except Exception:
+                    log.exception("Could not send Lighter signal notification")
+    except Exception as exc:
+        log.warning("Scheduled Lighter scan failed: %s", type(exc).__name__)
+
+
 # --------------------------------------------------------------- panel ----
 
 async def refresh_one_symbol(symbol: str):
@@ -693,6 +726,7 @@ def main():
         app.job_queue.run_repeating(check_watchlist, interval=CHECK_INTERVAL_SECONDS, first=30)
         app.job_queue.run_repeating(refresh_panel_cache, interval=PANEL_REFRESH_SECONDS, first=5)
         app.job_queue.run_repeating(check_price_alerts, interval=ALERT_CHECK_SECONDS, first=15)
+        app.job_queue.run_repeating(check_lighter_signals, interval=30 * 60, first=120)
 
     threading.Thread(target=webapp.run, daemon=True).start()
     log.info("Bot started, webapp thread launched")
