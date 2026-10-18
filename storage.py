@@ -26,6 +26,7 @@ _DEFAULT_STATE = {
     "price_alerts": {},         # alert_id(str) -> {"chat_id","symbol","op","price"}
     "strategy": "guarded",       # conservative trend filter is the default
     "strategy_migrated_v2": True, # one-time migration away from the weak default strategy
+    "lighter_last_signals": {},    # symbol -> last alerted direction for Lighter scan deduplication
 }
 
 
