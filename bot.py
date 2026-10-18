@@ -365,7 +365,7 @@ async def risk_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         position_value = position_size * signal.entry
         if position_value < min_notional:
             await update.message.reply_text(
-                f"{symbol}: пропуск. Минимальный расчётный объём \${min_notional:.2f} превышает доступный объём "
+                f"{symbol}: пропуск. Минимальный расчётный объём ${min_notional:.2f} превышает доступный объём "
                 f"при лимите риска \${risk_amount:.4f}. Риск не увеличиваю."
             )
             return
