@@ -212,10 +212,43 @@ def main():
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         writer.writerows(results)
+
+    # Compact, auditable direction comparison on identical fixed-RR/base-cost/no-funding settings.
+    directional = [r for r in results if r.get("exit_mode") == "fixed_rr"
+                   and r.get("cost_scenario") == "base"
+                   and r.get("funding_scenario") == "no_funding"
+                   and r.get("status") == "tested"]
+    summary = []
+    keys = sorted({(r["strategy"], r["direction_mode"]) for r in directional})
+    for strategy, direction in keys:
+        rows = [r for r in directional if r["strategy"] == strategy and r["direction_mode"] == direction]
+        if not rows:
+            continue
+        summary.append({
+            "strategy": strategy, "direction_mode": direction, "markets_tested": len(rows),
+            "mean_return_pct": round(sum(r["return_pct"] for r in rows) / len(rows), 3),
+            "median_return_pct": round(sorted(r["return_pct"] for r in rows)[len(rows)//2], 3),
+            "positive_markets": sum(r["return_pct"] > 0 for r in rows),
+            "mean_mtm_drawdown_pct": round(sum(r["max_drawdown_mtm_pct"] for r in rows) / len(rows), 3),
+            "total_trades": sum(r["trades"] for r in rows),
+            "mean_profit_factor": round(sum(r["profit_factor"] or 0 for r in rows) / len(rows), 3),
+        })
+    with open(os.path.join(args.out, "direction_summary.csv"), "w", newline="", encoding="utf-8") as f:
+        summary_fields = ["strategy", "direction_mode", "markets_tested", "mean_return_pct",
+                          "median_return_pct", "positive_markets", "mean_mtm_drawdown_pct",
+                          "total_trades", "mean_profit_factor"]
+        writer = csv.DictWriter(f, fieldnames=summary_fields)
+        writer.writeheader()
+        writer.writerows(summary)
     with open(os.path.join(args.out, "failures.json"), "w", encoding="utf-8") as f:
         json.dump(failures, f, ensure_ascii=False, indent=2)
     tested = [r for r in results if r.get("trades", 0) >= 5]
     print(f"Rows={len(results)}, tested={len(tested)}, API failures={len(failures)}")
-    print("Paper-only. Mark-to-market drawdown; full-history indicators; funding excluded.")
+    print("Directional fixed-RR/base-cost/no-funding summary:")
+    for row in sorted(summary, key=lambda x: x["mean_return_pct"], reverse=True):
+        print(f"  {row['strategy']}/{row['direction_mode']}: mean {row['mean_return_pct']:+.2f}%, "
+              f"positive markets {row['positive_markets']}/{row['markets_tested']}, "
+              f"DD {row['mean_mtm_drawdown_pct']:.2f}%, trades {row['total_trades']}")
+    print("Paper-only. Mark-to-market drawdown; full-history indicators; funding is synthetic stress, not historical data.")
 if __name__ == "__main__":
     main()
