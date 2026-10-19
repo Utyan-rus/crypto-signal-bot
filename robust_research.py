@@ -33,7 +33,7 @@ def max_drawdown(equity_path):
 
 def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fresh,
                  fee_rate, slippage_rate, exit_mode="fixed_rr", max_hold_bars=0,
-                 funding_rate_8h=0.0):
+                 funding_rate_8h=0.0, allowed_side="BOTH"):
     balance = base.START_BALANCE
     pos = None
     last_exit = -10**9
@@ -83,6 +83,8 @@ def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fr
                 pos["funding_paid"] = pos.get("funding_paid", 0.0) + abs(pos["qty"] * bar["c"]) * funding_rate_8h
 
         sig = signals.get(prev["t"])
+        if sig and allowed_side != "BOTH" and sig[0] != allowed_side:
+            sig = None
         prevprev = signals.get(candles[i-2]["t"]) if i >= 2 else None
         fresh_now = bool(sig and (not prevprev or prevprev[0] != sig[0]))
         if (pos is None and not closed and i-last_exit > cooldown and sig
@@ -138,7 +140,8 @@ def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fr
     gross_profit = sum(t["pnl"] for t in trades if t["pnl"] > 0)
     gross_loss = -sum(t["pnl"] for t in trades if t["pnl"] < 0)
     return {
-        "symbol": symbol, "strategy": strategy, "exit_mode": exit_mode,
+        "symbol": symbol, "strategy": strategy, "direction_mode": allowed_side,
+        "exit_mode": exit_mode,
         "max_hold_bars": max_hold_bars, "trades": len(trades), "wins": wins,
         "win_rate_pct": round(100 * wins / len(trades), 2) if trades else 0.0,
         "start_balance": base.START_BALANCE, "end_balance": round(balance, 6),
@@ -180,25 +183,26 @@ def main():
             for strategy in base.STRATEGIES:
                 signals = all_signals if strategy == "rsi_bollinger" else base.signal_map(candles, strategy)
                 for mode, cooldown, fresh in (("fresh_signal", 6, True),):
-                    # Hold entry rules constant while isolating exit management.
+                    # Compare directional selection while keeping all other settings fixed.
                     exit_variants = (("fixed_rr", 0), ("time_12_bars", 12),
                                      ("time_24_bars", 24), ("time_48_bars", 48),
                                      ("trailing_1r", 0))
-                    for exit_mode, max_hold in exit_variants:
-                        for cost_name, fee, slip in COST_SCENARIOS:
-                            for funding_name, funding_rate in (("no_funding", 0.0),
-                                                               ("funding_0.01pct_8h", 0.0001),
-                                                               ("funding_0.03pct_8h", 0.0003)):
-                                row = simulate_oos(symbol, candles, signals, holdout_start, strategy,
-                                                   cooldown, fresh, fee, slip, exit_mode, max_hold,
-                                                   funding_rate)
-                                row.update({"entry_mode": mode, "cooldown_bars": cooldown,
-                                            "cost_scenario": cost_name, "funding_scenario": funding_name,
-                                            "fee_per_side_pct": fee*100,
-                                            "slippage_per_side_pct": slip*100,
-                                            "indicator_context": "full 90d; entries gated to final 30d",
-                                            "funding": "synthetic adverse stress charged per 96 bars; not historical funding"})
-                                results.append(row)
+                    for direction_mode in ("BOTH", "LONG", "SHORT"):
+                        for exit_mode, max_hold in exit_variants:
+                            for cost_name, fee, slip in COST_SCENARIOS:
+                                for funding_name, funding_rate in (("no_funding", 0.0),
+                                                                   ("funding_0.01pct_8h", 0.0001),
+                                                                   ("funding_0.03pct_8h", 0.0003)):
+                                    row = simulate_oos(symbol, candles, signals, holdout_start, strategy,
+                                                       cooldown, fresh, fee, slip, exit_mode, max_hold,
+                                                       funding_rate, direction_mode)
+                                    row.update({"entry_mode": mode, "cooldown_bars": cooldown,
+                                                "cost_scenario": cost_name, "funding_scenario": funding_name,
+                                                "fee_per_side_pct": fee*100,
+                                                "slippage_per_side_pct": slip*100,
+                                                "indicator_context": "full 90d; entries gated to final 30d",
+                                                "funding": "synthetic adverse stress charged per 96 bars; not historical"})
+                                    results.append(row)
             time.sleep(0.15)
         except Exception as exc:
             failures.append({"symbol": symbol, "error": type(exc).__name__ + ": " + str(exc)[:180]})
