@@ -69,7 +69,8 @@ def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fr
                 gross = pos["qty"] * (exit_price - pos["entry"]) * (1 if pos["side"] == "LONG" else -1)
                 pnl = gross - abs(pos["qty"] * exit_price) * fee_rate - pos["entry_fee"] - pos.get("funding_paid", 0.0) - pos.get("funding_paid", 0.0)
                 balance += pnl
-                trades.append({"symbol": symbol, "strategy": strategy, "pnl": pnl, "reason": reason})
+                trades.append({"symbol": symbol, "strategy": strategy, "side": pos["side"],
+                                "pnl": pnl, "reason": reason})
                 pos = None
                 last_exit = i
                 closed = True
@@ -107,10 +108,10 @@ def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fr
                     exit_price = stop if reason == "SL" else target
                     exit_price *= (1 - slippage_rate if side == "LONG" else 1 + slippage_rate)
                     gross = qty * (exit_price - entry) * (1 if side == "LONG" else -1)
-                    balance += gross - abs(qty * exit_price) * fee_rate - pos["entry_fee"]
-                    trades.append({"symbol": symbol, "strategy": strategy,
-                                   "pnl": gross - abs(qty * exit_price) * fee_rate - pos["entry_fee"],
-                                   "reason": reason})
+                    pnl = gross - abs(qty * exit_price) * fee_rate - pos["entry_fee"]
+                    balance += pnl
+                    trades.append({"symbol": symbol, "strategy": strategy, "side": side,
+                                   "pnl": pnl, "reason": reason})
                     pos = None
                     last_exit = i
 
@@ -129,7 +130,8 @@ def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fr
         gross = pos["qty"] * (exit_price - pos["entry"]) * (1 if pos["side"] == "LONG" else -1)
         pnl = gross - abs(pos["qty"] * exit_price) * fee_rate - pos["entry_fee"]
         balance += pnl
-        trades.append({"symbol": symbol, "strategy": strategy, "pnl": pnl, "reason": "END"})
+        trades.append({"symbol": symbol, "strategy": strategy, "side": pos["side"],
+                       "pnl": pnl, "reason": "END"})
         equity_path.append(balance)
 
     wins = sum(t["pnl"] > 0 for t in trades)
