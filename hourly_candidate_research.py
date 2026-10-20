@@ -63,7 +63,7 @@ def build_model(candles, name):
     high = [b["h"] for b in candles]
     low = [b["l"] for b in candles]
     a = atr(candles)
-    e20, e50, e200 = ema(close, 20), ema(close, 50), ema(close, 200)
+    e20, e50, e200, e800 = ema(close, 20), ema(close, 50), ema(close, 200), ema(close, 800)
     don_high = rolling_high(high, 20)
     don_low = rolling_low(low, 20)
     exit_low = rolling_low(low, 10)
@@ -98,6 +98,14 @@ def build_model(candles, name):
                 elif e20[prev_i] >= e50[prev_i] and e20[i] < e50[i] and close[i] < e200[i]:
                     side = "SHORT"
             exits[b["t"]] = (e20[i], e20[i])
+        elif name == "ema800_threshold":
+            prev_i = i - 1
+            if prev_i >= 0 and e800[prev_i] is not None and e800[i] is not None:
+                if close[prev_i] <= e800[prev_i] and close[i] > e800[i]:
+                    side = "LONG"
+            threshold = e800[i] * 0.99 if e800[i] is not None else None
+            exits[b["t"]] = (threshold, threshold)
+            stop_dist = max(close[i] * 0.15, 2.5 * a[i])
         if side:
             signals[b["t"]] = (side, max(stop_dist, close[i] * 0.003))
     return signals, exits
@@ -218,7 +226,7 @@ def main():
     end = int(time.time())
     start = end - args.days*86400
     test_start = end - 60*86400
-    strategies = ("donchian_20_10","ema_trend_pullback","ema_20_50_cross")
+    strategies = ("donchian_20_10","ema_trend_pullback","ema_20_50_cross","ema800_threshold")
     results, failures = [], []
     print(f"Hourly research: {len(strategies)} strategies x {len(markets)} markets; {args.days}d context, final 60d OOS.")
     for n, market in enumerate(markets, 1):
@@ -234,7 +242,7 @@ def main():
                 row = simulate(symbol, candles, strategy, test_start)
                 row["bars_1h"] = len(candles)
                 row["test_window_days"] = 60
-                row["cost_assumptions"] = "Lighter standard taker fee assumed 0% + slippage 0.05% each side; no historical funding feed"
+                row["cost_assumptions"] = "Lighter standard taker fee assumed 0% + slippage 0.05% each side; funding excluded pending rate-direction validation"
                 results.append(row)
                 print(f"  {strategy}: OOS {row['return_pct']:+.2f}%, DD {row['max_drawdown_mtm_pct']:.2f}%, PF {row['profit_factor']}, trades {row['trades']}")
         except Exception as exc:
