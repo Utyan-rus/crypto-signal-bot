@@ -165,9 +165,11 @@ def simulate(symbol, candles, strategy, test_start):
             sig = current_sig
             side, stop_dist = sig
             entry = bar["o"] * (1+SLIPPAGE if side == "LONG" else 1-SLIPPAGE)
-            qty = balance * RISK_FRACTION / stop_dist
-            qty = max(qty, MIN_NOTIONAL / entry)
-            qty = min(qty, balance * MAX_LEVERAGE / entry)
+            # Respect the risk budget: never inflate a position merely to meet
+            # minimum notional. If the risk-sized order is too small, skip it.
+            risk_sized_qty = balance * RISK_FRACTION / stop_dist
+            leverage_cap_qty = balance * MAX_LEVERAGE / entry
+            qty = min(risk_sized_qty, leverage_cap_qty)
             if qty > 0 and qty*entry >= MIN_NOTIONAL:
                 stop = entry-stop_dist if side == "LONG" else entry+stop_dist
                 pos = {"side":side,"entry":entry,"qty":qty,"stop":stop,
