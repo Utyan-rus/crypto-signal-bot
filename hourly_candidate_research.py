@@ -12,7 +12,7 @@ import time
 
 from backtest import fetch_candles, get_markets
 
-FEE = 0.0
+FEE = 0.0005  # Conservative assumed taker fee: 0.05% each side; verify venue/account tier
 SLIPPAGE = 0.0005
 START_BALANCE = 5.0
 RISK_FRACTION = 0.005
@@ -90,12 +90,13 @@ def build_model(candles, name):
                 elif close[i] < e200[i] and e20[i] < e50[i] and close[prev_i] >= e20[prev_i] > close[i]:
                     side = "SHORT"
             exits[b["t"]] = (e20[i], e20[i])
-        elif name == "ema_20_50_cross":
+        elif name in ("ema_20_50_cross", "ema_20_50_cross_adx"):
             prev_i = i - 1
             if prev_i >= 0 and e20[prev_i] is not None and e50[prev_i] is not None:
-                if e20[prev_i] <= e50[prev_i] and e20[i] > e50[i] and close[i] > e200[i]:
+                trend_ok = (abs(e20[i] - e50[i]) / close[i] >= 0.001) if name == "ema_20_50_cross_adx" else True
+                if e20[prev_i] <= e50[prev_i] and e20[i] > e50[i] and close[i] > e200[i] and trend_ok:
                     side = "LONG"
-                elif e20[prev_i] >= e50[prev_i] and e20[i] < e50[i] and close[i] < e200[i]:
+                elif e20[prev_i] >= e50[prev_i] and e20[i] < e50[i] and close[i] < e200[i] and trend_ok:
                     side = "SHORT"
             exits[b["t"]] = (e20[i], e20[i])
         elif name == "ema800_threshold":
@@ -131,7 +132,7 @@ def max_dd(equity):
     return worst * 100
 
 
-def simulate(symbol, candles, strategy, test_start):
+def simulate(symbol, candles, strategy, test_start, test_end):
     signals, exit_levels = build_model(candles, strategy)
     balance = START_BALANCE
     equity = [balance]
@@ -171,7 +172,7 @@ def simulate(symbol, candles, strategy, test_start):
                                "entry_time":pos["entry_time"],"exit_time":bar["t"],
                                "pnl":pnl,"reason":reason})
                 pos = None
-        if pos is None and bar["t"] >= test_start and fresh and balance > 0:
+        if pos is None and test_start <= bar["t"] < test_end and fresh and balance > 0:
             sig = current_sig
             side, stop_dist = sig
             entry = bar["o"] * (1+SLIPPAGE if side == "LONG" else 1-SLIPPAGE)
@@ -235,7 +236,7 @@ def main():
     end = int(time.time())
     start = end - args.days*86400
     test_start = end - 60*86400
-    strategies = ("donchian_20_10","ema_trend_pullback","ema_20_50_cross","ema800_threshold")
+    strategies = ("donchian_20_10","ema_trend_pullback","ema_20_50_cross","ema_20_50_cross_adx","ema800_threshold")
     results, failures = [], []
     print(f"Hourly research: {len(strategies)} strategies x {len(markets)} markets; {args.days}d context, final 60d OOS.")
     for n, market in enumerate(markets, 1):
@@ -247,13 +248,16 @@ def main():
                 results.append({"symbol":symbol,"strategy":"ALL","status":"incomplete_history","bars":len(candles)})
                 print(f"  insufficient hourly history: {len(candles)} bars")
                 continue
+            windows = (("oos_older_30d", end - 60*86400, end - 30*86400), ("oos_recent_30d", end - 30*86400, end))
             for strategy in strategies:
-                row = simulate(symbol, candles, strategy, test_start)
-                row["bars_1h"] = len(candles)
-                row["test_window_days"] = 60
-                row["cost_assumptions"] = "Lighter standard taker fee assumed 0% + slippage 0.05% each side; funding excluded pending rate-direction validation"
-                results.append(row)
-                print(f"  {strategy}: OOS {row['return_pct']:+.2f}%, DD {row['max_drawdown_mtm_pct']:.2f}%, PF {row['profit_factor']}, trades {row['trades']}")
+                for window_name, window_start, window_end in windows:
+                    row = simulate(symbol, candles, strategy, window_start, window_end)
+                    row["bars_1h"] = len(candles)
+                    row["test_window_days"] = 30
+                    row["window"] = window_name
+                    row["cost_assumptions"] = "Assumed taker fee 0.05% + slippage 0.05% each side; funding excluded (historical rates not yet sourced)"
+                    results.append(row)
+                    print(f"  {strategy} {window_name}: OOS {row['return_pct']:+.2f}%, DD {row['max_drawdown_mtm_pct']:.2f}%, PF {row['profit_factor']}, trades {row['trades']}")
         except Exception as exc:
             failures.append({"symbol":symbol,"error":type(exc).__name__+": "+str(exc)[:200]})
             print(f"  FAILED: {type(exc).__name__}: {str(exc)[:200]}")
@@ -265,14 +269,15 @@ def main():
     with open(os.path.join(args.out,"failures.json"),"w",encoding="utf-8") as f:
         json.dump(failures,f,ensure_ascii=False,indent=2)
     tested = [r for r in results if r.get("trades",0) >= 5 and r.get("return_pct") is not None]
-    print("SUMMARY by strategy (equal-weight average per market):")
+    print("SUMMARY by strategy and independent 30-day window (equal-weight per market):")
     for name in strategies:
-        rows = [r for r in tested if r["strategy"] == name]
-        if rows:
-            print(f"  {name}: mean {sum(r['return_pct'] for r in rows)/len(rows):+.2f}%, "
-                  f"positive markets {sum(r['return_pct']>0 for r in rows)}/{len(rows)}, "
-                  f"mean MTM DD {sum(r['max_drawdown_mtm_pct'] for r in rows)/len(rows):.2f}%, "
-                  f"mean PF {sum(r['profit_factor'] for r in rows)/len(rows):.2f}")
+        for window_name in ("oos_older_30d", "oos_recent_30d"):
+            rows = [r for r in tested if r["strategy"] == name and r.get("window") == window_name]
+            if rows:
+                print(f"  {name} {window_name}: mean {sum(r['return_pct'] for r in rows)/len(rows):+.2f}%, "
+                      f"positive markets {sum(r['return_pct']>0 for r in rows)}/{len(rows)}, "
+                      f"mean MTM DD {sum(r['max_drawdown_mtm_pct'] for r in rows)/len(rows):.2f}%, "
+                      f"mean PF {sum(r['profit_factor'] for r in rows)/len(rows):.2f}")
     print(f"Rows={len(results)}, API failures={len(failures)}. Paper-only; no orders placed.")
 if __name__ == "__main__":
     main()
