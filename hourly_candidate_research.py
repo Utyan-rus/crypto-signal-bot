@@ -12,7 +12,7 @@ import time
 
 from backtest import fetch_candles, get_markets
 
-FEE = 0.0005
+FEE = 0.0
 SLIPPAGE = 0.0005
 START_BALANCE = 5.0
 RISK_FRACTION = 0.005
@@ -234,7 +234,7 @@ def main():
                 row = simulate(symbol, candles, strategy, test_start)
                 row["bars_1h"] = len(candles)
                 row["test_window_days"] = 60
-                row["cost_assumptions"] = "fee 0.05% + slippage 0.05% each side; no historical funding feed"
+                row["cost_assumptions"] = "Lighter standard taker fee assumed 0% + slippage 0.05% each side; no historical funding feed"
                 results.append(row)
                 print(f"  {strategy}: OOS {row['return_pct']:+.2f}%, DD {row['max_drawdown_mtm_pct']:.2f}%, PF {row['profit_factor']}, trades {row['trades']}")
         except Exception as exc:
