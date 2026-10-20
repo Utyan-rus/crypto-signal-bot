@@ -143,6 +143,8 @@ def simulate(symbol, candles, strategy, test_start, test_end):
     last_signal_active = False
     for i in range(1, len(candles)):
         prev, bar = candles[i-1], candles[i]
+        if bar["t"] >= test_end:
+            break
         current_sig = signals.get(prev["t"])
         active = bool(current_sig)
         fresh = active and (not last_signal_active or current_sig[0] != last_signal_side)
@@ -199,7 +201,8 @@ def simulate(symbol, candles, strategy, test_start, test_end):
             mtm += gross - abs(pos["qty"]*mark)*(FEE+SLIPPAGE) - pos["entry_fee"]
         equity.append(max(0.0, mtm))
     if pos:
-        bar = candles[-1]
+        # Close at the final candle inside this OOS window so adjacent windows stay independent.
+        bar = next((b for b in reversed(candles) if b["t"] < test_end), candles[-1])
         exit_price = bar["c"] * (1-SLIPPAGE if pos["side"]=="LONG" else 1+SLIPPAGE)
         pnl = pos["qty"]*(exit_price-pos["entry"])*(1 if pos["side"]=="LONG" else -1) - abs(pos["qty"]*exit_price)*FEE - pos["entry_fee"]
         balance += pnl
