@@ -90,10 +90,10 @@ def build_model(candles, name):
                 elif close[i] < e200[i] and e20[i] < e50[i] and close[prev_i] >= e20[prev_i] > close[i]:
                     side = "SHORT"
             exits[b["t"]] = (e20[i], e20[i])
-        elif name in ("ema_20_50_cross", "ema_20_50_cross_adx"):
+        elif name in ("ema_20_50_cross", "ema_20_50_cross_spread"):
             prev_i = i - 1
             if prev_i >= 0 and e20[prev_i] is not None and e50[prev_i] is not None:
-                trend_ok = (abs(e20[i] - e50[i]) / close[i] >= 0.001) if name == "ema_20_50_cross_adx" else True
+                trend_ok = (abs(e20[i] - e50[i]) / close[i] >= 0.001) if name == "ema_20_50_cross_spread" else True
                 if e20[prev_i] <= e50[prev_i] and e20[i] > e50[i] and close[i] > e200[i] and trend_ok:
                     side = "LONG"
                 elif e20[prev_i] >= e50[prev_i] and e20[i] < e50[i] and close[i] < e200[i] and trend_ok:
@@ -236,7 +236,7 @@ def main():
     end = int(time.time())
     start = end - args.days*86400
     test_start = end - 60*86400
-    strategies = ("donchian_20_10","ema_trend_pullback","ema_20_50_cross","ema_20_50_cross_adx","ema800_threshold")
+    strategies = ("donchian_20_10","ema_trend_pullback","ema_20_50_cross","ema_20_50_cross_spread","ema800_threshold")
     results, failures = [], []
     print(f"Hourly research: {len(strategies)} strategies x {len(markets)} markets; {args.days}d context, final 60d OOS.")
     for n, market in enumerate(markets, 1):
