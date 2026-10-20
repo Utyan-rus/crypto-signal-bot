@@ -1,6 +1,6 @@
 import unittest
 
-from hourly_candidate_research import build_model, max_dd, simulate
+from hourly_candidate_research import build_model, max_dd, simulate, size_position
 
 
 class HourlyCandidateResearchTests(unittest.TestCase):
@@ -20,6 +20,14 @@ class HourlyCandidateResearchTests(unittest.TestCase):
         candle_times = {b["t"] for b in self.candles}
         self.assertTrue(set(signals).issubset(candle_times))
         self.assertTrue(all(t < self.candles[-1]["t"] for t in signals))
+
+    def test_minimum_notional_never_forces_excess_risk(self):
+        # With $5 capital and a wide stop, the risk-sized order is below $1.
+        self.assertEqual(size_position(5.0, 100.0, 10.0), 0.0)
+        # A feasible order stays within the defined risk budget.
+        qty = size_position(5.0, 100.0, 0.1)
+        self.assertGreater(qty, 0.0)
+        self.assertLessEqual(qty * 0.1, 5.0 * 0.005 + 1e-12)
 
     def test_drawdown_is_mark_to_market(self):
         self.assertAlmostEqual(max_dd([5.0, 4.0, 4.5, 5.5]), 20.0)
