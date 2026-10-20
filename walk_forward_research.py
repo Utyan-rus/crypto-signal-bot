@@ -1,7 +1,7 @@
 """Fixed-parameter walk-forward audit of hourly Lighter strategy candidates.
 
 Paper-only: public candles, no order placement. Uses causal indicators from full
-chronological history and four non-overlapping 30-day OOS windows. Funding is
+chronological history and eight non-overlapping 30-day OOS windows. Funding is
 explicitly excluded because verified historical funding series are not integrated.
 """
 import argparse
@@ -16,8 +16,8 @@ from backtest import fetch_candles, get_markets
 
 STRATEGIES = ("donchian_20_10", "ema_20_50_cross", "ema_trend_pullback")
 WINDOW_DAYS = 30
-OOS_WINDOWS = 4
-CONTEXT_DAYS = 180
+OOS_WINDOWS = 8
+CONTEXT_DAYS = 365
 COSTS = (
     ("zero_fee_base_slippage", 0.0, 0.0005),
     ("assumed_taker_base_slippage", 0.0005, 0.0005),
