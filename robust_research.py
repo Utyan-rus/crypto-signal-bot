@@ -67,7 +67,7 @@ def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fr
             if exit_price is not None:
                 exit_price *= (1 - slippage_rate if pos["side"] == "LONG" else 1 + slippage_rate)
                 gross = pos["qty"] * (exit_price - pos["entry"]) * (1 if pos["side"] == "LONG" else -1)
-                pnl = gross - abs(pos["qty"] * exit_price) * fee_rate - pos["entry_fee"] - pos.get("funding_paid", 0.0) - pos.get("funding_paid", 0.0)
+                pnl = gross - abs(pos["qty"] * exit_price) * fee_rate - pos["entry_fee"] - pos.get("funding_paid", 0.0)
                 balance += pnl
                 trades.append({"symbol": symbol, "strategy": strategy, "side": pos["side"],
                                 "pnl": pnl, "reason": reason})
@@ -130,7 +130,7 @@ def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fr
         bar = candles[-1]
         exit_price = bar["c"] * (1 - slippage_rate if pos["side"] == "LONG" else 1 + slippage_rate)
         gross = pos["qty"] * (exit_price - pos["entry"]) * (1 if pos["side"] == "LONG" else -1)
-        pnl = gross - abs(pos["qty"] * exit_price) * fee_rate - pos["entry_fee"]
+        pnl = gross - abs(pos["qty"] * exit_price) * fee_rate - pos["entry_fee"] - pos.get("funding_paid", 0.0)
         balance += pnl
         trades.append({"symbol": symbol, "strategy": strategy, "side": pos["side"],
                        "pnl": pnl, "reason": "END"})
