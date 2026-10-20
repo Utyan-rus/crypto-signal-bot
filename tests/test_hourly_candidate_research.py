@@ -33,12 +33,12 @@ class HourlyCandidateResearchTests(unittest.TestCase):
         self.assertAlmostEqual(max_dd([5.0, 4.0, 4.5, 5.5]), 20.0)
 
     def test_simulation_returns_required_audit_fields(self):
-        result = simulate("TEST", self.candles, "ema_20_50_cross", 350*3600)
+        result = simulate("TEST", self.candles, "ema_20_50_cross", 350*3600, 450*3600)
         for key in ("return_pct", "max_drawdown_mtm_pct", "profit_factor", "trades"):
             self.assertIn(key, result)
 
     def test_strategy_names_are_supported(self):
-        for name in ("donchian_20_10", "ema_trend_pullback", "ema_20_50_cross"):
+        for name in ("donchian_20_10", "ema_trend_pullback", "ema_20_50_cross", "ema_20_50_cross_spread"):
             signals, exits = build_model(self.candles, name)
             self.assertIsInstance(signals, dict)
             self.assertIsInstance(exits, dict)
