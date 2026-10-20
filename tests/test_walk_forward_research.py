@@ -4,13 +4,13 @@ from walk_forward_research import COSTS, make_windows, summarize
 
 
 class WalkForwardResearchTests(unittest.TestCase):
-    def test_windows_are_chronological_non_overlapping_and_cover_120_days(self):
+    def test_windows_are_chronological_non_overlapping_and_cover_240_days(self):
         end = 2_000_000_000
         windows = make_windows(end)
-        self.assertEqual(len(windows), 4)
+        self.assertEqual(len(windows), 8)
         self.assertTrue(all(windows[i][2] == windows[i + 1][1] for i in range(3)))
         self.assertEqual(windows[-1][2], end)
-        self.assertEqual(windows[-1][2] - windows[0][1], 120 * 86400)
+        self.assertEqual(windows[-1][2] - windows[0][1], 240 * 86400)
 
     def test_cost_scenarios_increase_costs(self):
         self.assertEqual(len(COSTS), 4)
