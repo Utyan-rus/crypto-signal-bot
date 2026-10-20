@@ -226,7 +226,7 @@ def main():
         print(f"[{n}/{len(markets)}] {symbol}")
         try:
             candles = fetch_candles(market["id"], "1h", start, end)
-            if len(candles) < min(args.days*24*0.8, 1200):
+            if len(candles) < args.days*24*0.8:
                 results.append({"symbol":symbol,"strategy":"ALL","status":"incomplete_history","bars":len(candles)})
                 print(f"  insufficient hourly history: {len(candles)} bars")
                 continue
