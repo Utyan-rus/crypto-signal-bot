@@ -1,4 +1,4 @@
-name: Fixed-parameter hourly walk-forward research
+name: 365-day fixed-parameter hourly walk-forward research
 
 on:
   pull_request:
@@ -32,8 +32,8 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Run unit tests
         run: python -m unittest discover -s tests -p 'test_walk_forward_research.py' -v
-      - name: Run 180-day hourly walk-forward research
-        run: python walk_forward_research.py --days 180 --max-markets "${{ inputs.max_markets || '5' }}" --out walk-forward-results
+      - name: Run 365-day history with eight OOS windows
+        run: python walk_forward_research.py --days 365 --max-markets "${{ inputs.max_markets || '5' }}" --out walk-forward-results
       - uses: actions/upload-artifact@v4
         if: always()
         with:
