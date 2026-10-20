@@ -111,6 +111,16 @@ def build_model(candles, name):
     return signals, exits
 
 
+def size_position(balance, entry, stop_dist):
+    """Risk-budget sizing; return zero when exchange minimum notional is unaffordable."""
+    if balance <= 0 or entry <= 0 or stop_dist <= 0:
+        return 0.0
+    risk_sized_qty = balance * RISK_FRACTION / stop_dist
+    leverage_cap_qty = balance * MAX_LEVERAGE / entry
+    qty = min(risk_sized_qty, leverage_cap_qty)
+    return qty if qty * entry >= MIN_NOTIONAL else 0.0
+
+
 def max_dd(equity):
     peak = equity[0] if equity else START_BALANCE
     worst = 0.0
@@ -165,12 +175,9 @@ def simulate(symbol, candles, strategy, test_start):
             sig = current_sig
             side, stop_dist = sig
             entry = bar["o"] * (1+SLIPPAGE if side == "LONG" else 1-SLIPPAGE)
-            # Respect the risk budget: never inflate a position merely to meet
-            # minimum notional. If the risk-sized order is too small, skip it.
-            risk_sized_qty = balance * RISK_FRACTION / stop_dist
-            leverage_cap_qty = balance * MAX_LEVERAGE / entry
-            qty = min(risk_sized_qty, leverage_cap_qty)
-            if qty > 0 and qty*entry >= MIN_NOTIONAL:
+            # Do not inflate risk to meet the exchange minimum notional.
+            qty = size_position(balance, entry, stop_dist)
+            if qty > 0:
                 stop = entry-stop_dist if side == "LONG" else entry+stop_dist
                 pos = {"side":side,"entry":entry,"qty":qty,"stop":stop,
                        "entry_fee":qty*entry*FEE,"entry_time":bar["t"]}
