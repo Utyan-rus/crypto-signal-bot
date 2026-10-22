@@ -20,10 +20,10 @@ class FundingAwareResearchTests(unittest.TestCase):
 
     def test_funding_cost_is_applied_to_open_long(self):
         candles = [
-            {"t": 0, "o": 100, "h": 100.05, "l": 99.95, "c": 100, "v": 100},
-            {"t": 3600, "o": 100, "h": 100.05, "l": 99.95, "c": 100, "v": 100},
-            {"t": 7200, "o": 100, "h": 100.05, "l": 99.95, "c": 100, "v": 100},
-            {"t": 10800, "o": 100, "h": 100.05, "l": 99.95, "c": 100, "v": 100},
+            {"t": 0, "o": 100, "h": 100.01, "l": 99.99, "c": 100, "v": 100},
+            {"t": 3600, "o": 100, "h": 100.01, "l": 99.99, "c": 100, "v": 100},
+            {"t": 7200, "o": 100, "h": 100.01, "l": 99.99, "c": 100, "v": 100},
+            {"t": 10800, "o": 100, "h": 100.01, "l": 99.99, "c": 100, "v": 100},
         ]
         signals = {3600: ("LONG", 0.1)}
         with patch.object(research, "build_model", return_value=(signals, {})):
@@ -33,10 +33,10 @@ class FundingAwareResearchTests(unittest.TestCase):
 
     def test_funding_receipt_offsets_short_position_cost(self):
         candles = [
-            {"t": 0, "o": 100, "h": 100.05, "l": 99.95, "c": 100, "v": 100},
-            {"t": 3600, "o": 100, "h": 100.05, "l": 99.95, "c": 100, "v": 100},
-            {"t": 7200, "o": 100, "h": 100.05, "l": 99.95, "c": 100, "v": 100},
-            {"t": 10800, "o": 100, "h": 100.05, "l": 99.95, "c": 100, "v": 100},
+            {"t": 0, "o": 100, "h": 100.01, "l": 99.99, "c": 100, "v": 100},
+            {"t": 3600, "o": 100, "h": 100.01, "l": 99.99, "c": 100, "v": 100},
+            {"t": 7200, "o": 100, "h": 100.01, "l": 99.99, "c": 100, "v": 100},
+            {"t": 10800, "o": 100, "h": 100.01, "l": 99.99, "c": 100, "v": 100},
         ]
         signals = {3600: ("SHORT", 0.1)}
         with patch.object(research, "build_model", return_value=(signals, {})):
