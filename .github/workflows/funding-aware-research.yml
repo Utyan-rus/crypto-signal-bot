@@ -39,7 +39,7 @@ jobs:
       - name: Audit real market constraints
         run: python market_constraints_audit.py
       - name: Run 180-day funding-aware walk-forward research
-        run: python funding_aware_research.py --days 180 --max-markets "\${{ inputs.max_markets || '5' }}" --out funding-aware-results
+        run: python funding_aware_research.py --days 180 --max-markets "${{ inputs.max_markets || '5' }}" --out funding-aware-results
       - uses: actions/upload-artifact@v4
         if: always()
         with:
