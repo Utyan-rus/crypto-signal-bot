@@ -1,0 +1,51 @@
+name: Funding-aware paper research and market constraints audit
+
+on:
+  pull_request:
+    paths:
+      - "funding_aware_research.py"
+      - "market_constraints_audit.py"
+      - "tests/test_funding_aware_research.py"
+      - ".github/workflows/funding-aware-research.yml"
+  workflow_dispatch:
+    inputs:
+      max_markets:
+        description: "Markets to test"
+        required: true
+        default: "5"
+        type: choice
+        options: ["5", "10", "25"]
+
+permissions:
+  contents: read
+
+jobs:
+  funding-aware-research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt
+      - name: Compile and test
+        run: |
+          python -m compileall -q funding_aware_research.py market_constraints_audit.py
+          python -m unittest discover -s tests -p 'test_funding_aware_research.py' -v
+      - name: Audit real market constraints
+        run: python market_constraints_audit.py
+      - name: Run 180-day funding-aware walk-forward research
+        run: python funding_aware_research.py --days 180 --max-markets "\${{ inputs.max_markets || '5' }}" --out funding-aware-results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lighter-funding-aware-research
+          path: |
+            funding-aware-results/
+            market-constraints-results/
+          if-no-files-found: warn
+          retention-days: 30
