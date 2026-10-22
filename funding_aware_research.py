@@ -97,7 +97,7 @@ def simulate_with_funding(symbol, candles, strategy, test_start, test_end, fundi
         if pos:
             mark = bar["c"]
             gross = pos["qty"]*(mark-pos["entry"])*(1 if pos["side"]=="LONG" else -1)
-            mtm += gross - abs(qty*mark)*(FEE+SLIPPAGE) - pos["entry_fee"] - pos["funding_cost"]
+            mtm += gross - abs(pos["qty"]*mark)*(FEE+SLIPPAGE) - pos["entry_fee"] - pos["funding_cost"]
         equity.append(max(0.0, mtm))
     if pos:
         bar = next((b for b in reversed(candles) if b["t"] < test_end), candles[-1])
