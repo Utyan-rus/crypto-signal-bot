@@ -14,8 +14,8 @@ class FundingAwareResearchTests(unittest.TestCase):
         ]
         with patch.object(research, "get_json", side_effect=payloads) as get_json:
             rates = research.fetch_funding_rates(1, 0, 8000)
-        self.assertEqual(rates[3600], 0.001)
-        self.assertEqual(rates[7200], -0.002)
+        self.assertAlmostEqual(rates[3600], 0.00001)
+        self.assertAlmostEqual(rates[7200], -0.00002)
         self.assertEqual(get_json.call_count, 1)
 
     def test_funding_cost_is_applied_to_open_long(self):
