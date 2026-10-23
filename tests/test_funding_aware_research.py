@@ -17,6 +17,8 @@ class FundingAwareResearchTests(unittest.TestCase):
         self.assertAlmostEqual(rates[3600], 0.00001)
         self.assertAlmostEqual(rates[7200], -0.00002)
         self.assertEqual(get_json.call_count, 1)
+        self.assertEqual(get_json.call_args.args[1]["start_timestamp"], 0)
+        self.assertEqual(get_json.call_args.args[1]["end_timestamp"], 8000000)
 
     def test_funding_cost_is_applied_to_open_long(self):
         candles = [
