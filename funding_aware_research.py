@@ -16,7 +16,8 @@ def fetch_funding_rates(market_id, start_ts, end_ts):
     while cursor < end_ts:
         chunk_end = min(end_ts, cursor + 700 * 3600)
         data = get_json("/fundings", {"market_id": market_id, "resolution": "1h",
-            "start_timestamp": cursor, "end_timestamp": chunk_end, "count_back": 0})
+            # Lighter API timestamp bounds are milliseconds; row timestamps are normalized below.
+            "start_timestamp": cursor * 1000, "end_timestamp": chunk_end * 1000, "count_back": 0})
         rows = data.get("fundings", []) if isinstance(data, dict) else []
         for row in rows or []:
             try:
