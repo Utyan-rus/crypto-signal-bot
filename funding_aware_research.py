@@ -39,9 +39,9 @@ def fetch_funding_rates(market_id, start_ts, end_ts):
         cursor = chunk_end
     return out
 
-def simulate_with_funding(symbol, candles, strategy, test_start, test_end, funding):
+def simulate_with_funding(symbol, candles, strategy, test_start, test_end, funding, start_balance=START_BALANCE):
     signals, exit_levels = build_model(candles, strategy)
-    balance, equity, pos, trades = START_BALANCE, [START_BALANCE], None, []
+    balance, equity, pos, trades = start_balance, [start_balance], None, []
     funding_events = 0
     min_notional_rejections = 0
     min_notional_usd = 10.0  # Audited Lighter perp metadata: min_quote_amount is $10 for nearly all markets.
@@ -117,7 +117,7 @@ def simulate_with_funding(symbol, candles, strategy, test_start, test_end, fundi
     gp = sum(t["pnl"] for t in trades if t["pnl"] > 0)
     gl = -sum(t["pnl"] for t in trades if t["pnl"] < 0)
     return {"symbol":symbol,"strategy":strategy,"trades":len(trades),
-        "return_pct":round(100*(balance/START_BALANCE-1),3),"end_balance":round(balance,6),
+        "start_balance":start_balance,"return_pct":round(100*(balance/start_balance-1),3),"end_balance":round(balance,6),
         "max_drawdown_mtm_pct":round(max_dd(equity),3),
         "profit_factor":round(gp/gl,3) if gl else (999.0 if gp else 0.0),
         "funding_events_charged":funding_events,
@@ -132,6 +132,7 @@ def main():
     p.add_argument("--days", type=int, default=180)
     p.add_argument("--max-markets", type=int, default=5)
     p.add_argument("--out", default="funding-aware-results")
+    p.add_argument("--balances", default="5,50,100", help="Comma-separated starting balances for feasibility and edge research")
     args = p.parse_args()
     if args.days < 120:
         p.error("Use at least 120 days for warm-up and OOS windows.")
@@ -142,6 +143,9 @@ def main():
     windows = (("oos_older_30d", end-60*86400, end-30*86400),
                ("oos_recent_30d", end-30*86400, end))
     strategies = ("donchian_20_10","ema_20_50_cross","ema_trend_pullback")
+    balances = [float(x.strip()) for x in args.balances.split(",") if x.strip()]
+    if not balances or any(x <= 0 for x in balances):
+        p.error("--balances must contain positive numbers")
     rows, errors = [], []
     for market in markets:
         symbol, mid = market["symbol"], market["id"]
@@ -157,12 +161,13 @@ def main():
                 continue
             for strategy in strategies:
                 for window, lo, hi in windows:
-                    row = simulate_with_funding(symbol,candles,strategy,lo,hi,funding)
-                    row.update({"window":window,"bars_1h":len(candles),
+                    for starting_balance in balances:
+                        row = simulate_with_funding(symbol,candles,strategy,lo,hi,funding,start_balance=starting_balance)
+                        row.update({"window":window,"bars_1h":len(candles),
                         "funding_coverage_pct":round(100*len([t for t in funding if start <= t < end])/(args.days*24),2),
                         "funding_source":"Lighter /api/v1/fundings resolution=1h",
                         "funding_sign_convention":"positive rate: long pays, short receives"})
-                    rows.append(row)
+                        rows.append(row)
         except Exception as exc:
             errors.append({"symbol":symbol,"error":type(exc).__name__+": "+str(exc)[:200]})
             print(f"FAILED {symbol}: {type(exc).__name__}: {str(exc)[:200]}")
