@@ -25,7 +25,8 @@ def fetch_funding_rates(market_id, start_ts, end_ts):
                     ts //= 1000
                 if row.get("rate") is None:
                     continue
-                rate = float(row["rate"])
+                # Lighter historical `rate` is expressed in percent per hour, not a decimal fraction.
+                rate = float(row["rate"]) / 100.0
                 direction = str(row.get("direction", "")).lower()
                 if direction == "short":
                     rate = -abs(rate)
@@ -117,7 +118,7 @@ def simulate_with_funding(symbol, candles, strategy, test_start, test_end, fundi
         "funding_events_charged":funding_events,
         "funding_net_cost_usd":round(sum(t.get("funding_cost",0) for t in trades),8),
         "funding_history_rows":len(funding),"fees_per_side_pct":FEE*100,
-        "slippage_per_side_pct":SLIPPAGE*100,"min_notional_assumption_usd":1.0,
+        "slippage_per_side_pct":SLIPPAGE*100,"min_notional_assumption_usd":10.0,
         "status":"tested" if len(trades)>=5 else "low_sample"}
 
 def main():
