@@ -43,6 +43,8 @@ def simulate_with_funding(symbol, candles, strategy, test_start, test_end, fundi
     signals, exit_levels = build_model(candles, strategy)
     balance, equity, pos, trades = START_BALANCE, [START_BALANCE], None, []
     funding_events = 0
+    min_notional_rejections = 0
+    min_notional_usd = 10.0  # Audited Lighter perp metadata: min_quote_amount is $10 for nearly all markets.
     for i in range(1, len(candles)):
         prev, bar = candles[i - 1], candles[i]
         if bar["t"] >= test_end:
@@ -81,6 +83,9 @@ def simulate_with_funding(symbol, candles, strategy, test_start, test_end, fundi
             side, stop_dist = current_sig
             entry = bar["o"] * (1+SLIPPAGE if side == "LONG" else 1-SLIPPAGE)
             qty = size_position(balance, entry, stop_dist)
+            if 0 < qty * entry < min_notional_usd:
+                min_notional_rejections += 1
+                qty = 0.0
             if qty > 0:
                 stop = entry-stop_dist if side == "LONG" else entry+stop_dist
                 pos = {"side":side,"entry":entry,"qty":qty,"stop":stop,
@@ -117,7 +122,8 @@ def simulate_with_funding(symbol, candles, strategy, test_start, test_end, fundi
         "profit_factor":round(gp/gl,3) if gl else (999.0 if gp else 0.0),
         "funding_events_charged":funding_events,
         "funding_net_cost_usd":round(sum(t.get("funding_cost",0) for t in trades),8),
-        "funding_history_rows":len(funding),"fees_per_side_pct":FEE*100,
+        "funding_history_rows":len(funding),"min_notional_rejections":min_notional_rejections,
+        "fees_per_side_pct":FEE*100,
         "slippage_per_side_pct":SLIPPAGE*100,"min_notional_assumption_usd":10.0,
         "status":"tested" if len(trades)>=5 else "low_sample"}
 
