@@ -5,7 +5,9 @@ on:
     paths:
       - "funding_aware_research.py"
       - "market_constraints_audit.py"
+      - "ema_benchmark_research.py"
       - "tests/test_funding_aware_research.py"
+      - "tests/test_ema_benchmark_research.py"
       - ".github/workflows/funding-aware-research.yml"
   workflow_dispatch:
     inputs:
@@ -34,12 +36,15 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Compile and test
         run: |
-          python -m compileall -q funding_aware_research.py market_constraints_audit.py
+          python -m compileall -q funding_aware_research.py market_constraints_audit.py ema_benchmark_research.py
           python -m unittest discover -s tests -p 'test_funding_aware_research.py' -v
+          python -m unittest discover -s tests -p 'test_ema_benchmark_research.py' -v
       - name: Audit real market constraints
         run: python market_constraints_audit.py
       - name: Run 180-day funding-aware walk-forward research
         run: python funding_aware_research.py --days 180 --max-markets "${{ inputs.max_markets || '5' }}" --out funding-aware-results
+      - name: Run 365-day EMA cross vs buy-and-hold OOS benchmark
+        run: python ema_benchmark_research.py --days 365 --max-markets "${{ inputs.max_markets || '5' }}" --balances 5,50,100 --out ema-benchmark-results
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -47,5 +52,6 @@ jobs:
           path: |
             funding-aware-results/
             market-constraints-results/
+            ema-benchmark-results/
           if-no-files-found: warn
           retention-days: 30
