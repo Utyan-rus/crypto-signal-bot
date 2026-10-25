@@ -58,6 +58,8 @@ class EmaBenchmarkResearchTests(unittest.TestCase):
         self.assertEqual(len(pairs), 1)
         self.assertEqual(pairs[0]["ema_minus_benchmark_pct_points"], -3.0)
         self.assertTrue(pairs[0]["ema_eligible_5plus_trades"])
+        self.assertTrue(pairs[0]["paired_evaluable"])
+        self.assertTrue(pairs[0]["benchmark_quote_eligible"])
 
     def test_comparison_files_include_window_and_balance_splits(self):
         import os
@@ -78,6 +80,36 @@ class EmaBenchmarkResearchTests(unittest.TestCase):
             self.assertTrue(any(x["scope"] == "window:oos_01:eligible" for x in summary))
             self.assertTrue(os.path.exists(os.path.join(tmp, "ema_benchmark_comparison.csv")))
             self.assertTrue(os.path.exists(os.path.join(tmp, "ema_benchmark_comparison_summary.csv")))
+
+
+    def test_ineligible_pairs_do_not_count_as_benchmark_outperformance(self):
+        import os
+        import tempfile
+        rows = [
+            {"symbol": "BTC", "strategy": "ema_20_50_cross", "benchmark": False,
+             "window": "oos_01", "start_balance": 5.0, "status": "low_sample",
+             "trades": 0, "return_pct": 0.0, "max_drawdown_mtm_pct": 0.0, "profit_factor": 0.0},
+            {"symbol": "BTC", "strategy": "buy_hold_long_1x", "benchmark": True,
+             "window": "oos_01", "start_balance": 5.0, "status": "tested",
+             "trades": 1, "return_pct": -3.0, "max_drawdown_mtm_pct": 5.0,
+             "funding_net_cost_usd": 0.1, "min_quote_notional_usd": 4.9,
+             "min_quote_check_pass": False, "execution_feasibility": "below_min_quote"},
+        ]
+        pairs = build_comparison_rows(rows)
+        self.assertEqual(len(pairs), 1)
+        self.assertFalse(pairs[0]["ema_eligible_5plus_trades"])
+        self.assertFalse(pairs[0]["benchmark_quote_eligible"])
+        self.assertFalse(pairs[0]["paired_evaluable"])
+        self.assertFalse(pairs[0]["ema_outperforms_benchmark"])
+        self.assertEqual(pairs[0]["ema_minus_benchmark_pct_points"], "")
+        with tempfile.TemporaryDirectory() as tmp:
+            _, summary = write_comparison(rows, tmp)
+            overall = next(x for x in summary if x["scope"] == "all_pairs_including_low_sample")
+            self.assertEqual(overall["ema_outperforms_benchmark_pairs"], 0)
+            self.assertEqual(overall["paired_evaluable_pairs"], 0)
+            self.assertEqual(overall["mean_excess_return_pct_points"], "")
+            detail = open(os.path.join(tmp, "ema_benchmark_comparison.csv"), encoding="utf-8").read()
+            self.assertIn("paired_evaluable", detail.splitlines()[0])
 
 
 if __name__ == "__main__":
