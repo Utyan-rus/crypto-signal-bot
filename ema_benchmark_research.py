@@ -102,7 +102,13 @@ def build_comparison_rows(rows):
         except (KeyError, TypeError, ValueError):
             continue
         ema_trades = int(float(ema.get("trades", 0) or 0))
-        eligible = ema.get("status") == "tested" and ema_trades >= 5
+        ema_eligible = ema.get("status") == "tested" and ema_trades >= 5
+        bench_quote_eligible = (
+            bench.get("status") == "tested"
+            and bool(bench.get("min_quote_check_pass"))
+            and bench.get("execution_feasibility") != "below_min_quote"
+        )
+        paired_evaluable = ema_eligible and bench_quote_eligible
         pairs.append({
             "symbol": symbol,
             "window": window,
@@ -118,9 +124,11 @@ def build_comparison_rows(rows):
             "benchmark_min_quote_notional_usd": bench.get("min_quote_notional_usd", ""),
             "benchmark_min_quote_check_pass": bench.get("min_quote_check_pass", False),
             "benchmark_execution_feasibility": bench.get("execution_feasibility", ""),
-            "ema_minus_benchmark_pct_points": round(ema_ret - bench_ret, 3),
-            "ema_outperforms_benchmark": ema_ret > bench_ret,
-            "ema_eligible_5plus_trades": eligible,
+            "benchmark_quote_eligible": bench_quote_eligible,
+            "paired_evaluable": paired_evaluable,
+            "ema_minus_benchmark_pct_points": round(ema_ret - bench_ret, 3) if paired_evaluable else "",
+            "ema_outperforms_benchmark": (ema_ret > bench_ret) if paired_evaluable else False,
+            "ema_eligible_5plus_trades": ema_eligible,
         })
     return pairs
 
@@ -128,10 +136,11 @@ def build_comparison_rows(rows):
 def _summarize_pairs(balance, scope, subset):
     ema_returns = [float(x["ema_return_pct"]) for x in subset]
     benchmark_returns = [float(x["benchmark_return_pct"]) for x in subset]
-    excess = [float(x["ema_minus_benchmark_pct_points"]) for x in subset]
-    ema_dd = [float(x["ema_max_drawdown_mtm_pct"]) for x in subset
+    evaluable = [x for x in subset if x.get("paired_evaluable")]
+    excess = [float(x["ema_minus_benchmark_pct_points"]) for x in evaluable]
+    ema_dd = [float(x["ema_max_drawdown_mtm_pct"]) for x in evaluable
               if x.get("ema_max_drawdown_mtm_pct") not in ("", None)]
-    benchmark_dd = [float(x["benchmark_max_drawdown_mtm_pct"]) for x in subset
+    benchmark_dd = [float(x["benchmark_max_drawdown_mtm_pct"]) for x in evaluable
                     if x.get("benchmark_max_drawdown_mtm_pct") not in ("", None)]
     return {
         "start_balance": balance,
@@ -145,8 +154,10 @@ def _summarize_pairs(balance, scope, subset):
         "benchmark_positive_pairs": sum(x > 0 for x in benchmark_returns),
         "mean_excess_return_pct_points": round(statistics.mean(excess), 3) if excess else "",
         "median_excess_return_pct_points": round(statistics.median(excess), 3) if excess else "",
-        "ema_outperforms_benchmark_pairs": sum(bool(x["ema_outperforms_benchmark"]) for x in subset),
+        "ema_outperforms_benchmark_pairs": sum(bool(x["ema_outperforms_benchmark"]) for x in evaluable),
         "ema_eligible_pairs": sum(bool(x["ema_eligible_5plus_trades"]) for x in subset),
+        "benchmark_quote_eligible_pairs": sum(bool(x.get("benchmark_quote_eligible")) for x in subset),
+        "paired_evaluable_pairs": len(evaluable),
         "mean_ema_mtm_drawdown_pct": round(statistics.mean(ema_dd), 3) if ema_dd else "",
         "mean_benchmark_mtm_drawdown_pct": round(statistics.mean(benchmark_dd), 3) if benchmark_dd else "",
     }
@@ -160,6 +171,7 @@ def write_comparison(rows, out_dir):
         "benchmark_return_pct", "benchmark_max_drawdown_mtm_pct",
         "benchmark_funding_net_cost_usd", "benchmark_min_quote_notional_usd",
         "benchmark_min_quote_check_pass", "benchmark_execution_feasibility",
+        "benchmark_quote_eligible", "paired_evaluable",
         "ema_minus_benchmark_pct_points", "ema_outperforms_benchmark",
         "ema_eligible_5plus_trades",
     ]
@@ -173,24 +185,28 @@ def write_comparison(rows, out_dir):
     for balance in balances:
         balance_rows = [x for x in pairs if float(x["start_balance"]) == balance]
         eligible_rows = [x for x in balance_rows if x["ema_eligible_5plus_trades"]]
+        paired_rows = [x for x in balance_rows if x["paired_evaluable"]]
         summaries.append(_summarize_pairs(balance, "all_pairs_including_low_sample", balance_rows))
         summaries.append(_summarize_pairs(balance, "ema_eligible_5plus_trades", eligible_rows))
+        summaries.append(_summarize_pairs(balance, "paired_evaluable", paired_rows))
         for symbol in sorted({x["symbol"] for x in balance_rows}):
             symbol_rows = [x for x in balance_rows if x["symbol"] == symbol]
             summaries.append(_summarize_pairs(balance, f"symbol:{symbol}:all", symbol_rows))
             summaries.append(_summarize_pairs(balance, f"symbol:{symbol}:eligible", [x for x in symbol_rows if x["ema_eligible_5plus_trades"]]))
+            summaries.append(_summarize_pairs(balance, f"symbol:{symbol}:paired", [x for x in symbol_rows if x["paired_evaluable"]]))
         for window in sorted({x["window"] for x in balance_rows}):
             window_rows = [x for x in balance_rows if x["window"] == window]
             summaries.append(_summarize_pairs(balance, f"window:{window}:all", window_rows))
             summaries.append(_summarize_pairs(balance, f"window:{window}:eligible", [x for x in window_rows if x["ema_eligible_5plus_trades"]]))
+            summaries.append(_summarize_pairs(balance, f"window:{window}:paired", [x for x in window_rows if x["paired_evaluable"]]))
 
     summary_fields = [
         "start_balance", "scope", "pairs", "ema_mean_return_pct", "ema_median_return_pct",
         "ema_positive_pairs", "benchmark_mean_return_pct", "benchmark_median_return_pct",
         "benchmark_positive_pairs", "mean_excess_return_pct_points",
         "median_excess_return_pct_points", "ema_outperforms_benchmark_pairs",
-        "ema_eligible_pairs", "mean_ema_mtm_drawdown_pct",
-        "mean_benchmark_mtm_drawdown_pct",
+        "ema_eligible_pairs", "benchmark_quote_eligible_pairs", "paired_evaluable_pairs",
+        "mean_ema_mtm_drawdown_pct", "mean_benchmark_mtm_drawdown_pct",
     ]
     with open(os.path.join(out_dir, "ema_benchmark_comparison_summary.csv"), "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=summary_fields)
