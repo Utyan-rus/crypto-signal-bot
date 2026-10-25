@@ -108,7 +108,8 @@ class EmaBenchmarkResearchTests(unittest.TestCase):
             self.assertEqual(overall["ema_outperforms_benchmark_pairs"], 0)
             self.assertEqual(overall["paired_evaluable_pairs"], 0)
             self.assertEqual(overall["mean_excess_return_pct_points"], "")
-            detail = open(os.path.join(tmp, "ema_benchmark_comparison.csv"), encoding="utf-8").read()
+            with open(os.path.join(tmp, "ema_benchmark_comparison.csv"), encoding="utf-8") as detail_file:
+                detail = detail_file.read()
             self.assertIn("paired_evaluable", detail.splitlines()[0])
 
 
