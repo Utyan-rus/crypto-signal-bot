@@ -41,8 +41,8 @@ jobs:
           python -m unittest discover -s tests -p 'test_ema_benchmark_research.py' -v
       - name: Audit real market constraints
         run: python market_constraints_audit.py
-      - name: Run 180-day funding-aware walk-forward research
-        run: python funding_aware_research.py --days 180 --max-markets "${{ inputs.max_markets || '10' }}" --out funding-aware-results
+      - name: Run 365-day funding-aware research across eight OOS windows
+        run: python funding_aware_research.py --days 365 --windows 8 --max-markets "${{ inputs.max_markets || '10' }}" --out funding-aware-results
       - name: Run 365-day EMA cross vs buy-and-hold OOS benchmark
         run: python ema_benchmark_research.py --days 365 --max-markets "${{ inputs.max_markets || '10' }}" --balances 5,50,100 --out ema-benchmark-results
       - uses: actions/upload-artifact@v4

@@ -40,6 +40,17 @@ def fetch_funding_rates(market_id, start_ts, end_ts):
         cursor = chunk_end
     return out
 
+def make_oos_windows(end_ts, count=2, window_days=30):
+    """Return non-overlapping, chronologically ordered OOS windows ending at end_ts."""
+    if count < 1:
+        raise ValueError("count must be >= 1")
+    width = window_days * 86400
+    return [
+        (f"oos_{i + 1:02d}", end_ts - (count - i) * width, end_ts - (count - i - 1) * width)
+        for i in range(count)
+    ]
+
+
 def simulate_with_funding(symbol, candles, strategy, test_start, test_end, funding, start_balance=START_BALANCE):
     signals, exit_levels = build_model(candles, strategy)
     balance, equity, pos, trades = start_balance, [start_balance], None, []
@@ -131,18 +142,20 @@ def simulate_with_funding(symbol, candles, strategy, test_start, test_end, fundi
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--days", type=int, default=180)
+    p.add_argument("--windows", type=int, default=2, help="Number of non-overlapping 30-day OOS windows")
     p.add_argument("--max-markets", type=int, default=5)
     p.add_argument("--out", default="funding-aware-results")
     p.add_argument("--balances", default="5,50,100", help="Comma-separated starting balances for feasibility and edge research")
     args = p.parse_args()
-    if args.days < 120:
-        p.error("Use at least 120 days for warm-up and OOS windows.")
+    if args.windows < 1:
+        p.error("--windows must be >= 1")
+    if args.days < args.windows * 30 + 60:
+        p.error("Need at least 60 days of warm-up beyond the requested OOS windows.")
     os.makedirs(args.out, exist_ok=True)
     end = int(time.time()); start = end - args.days*86400
     markets = get_markets()
     if args.max_markets > 0: markets = markets[:args.max_markets]
-    windows = (("oos_older_30d", end-60*86400, end-30*86400),
-               ("oos_recent_30d", end-30*86400, end))
+    windows = make_oos_windows(end, count=args.windows, window_days=30)
     strategies = ("donchian_20_10","ema_20_50_cross","ema_trend_pullback")
     balances = [float(x.strip()) for x in args.balances.split(",") if x.strip()]
     if not balances or any(x <= 0 for x in balances):

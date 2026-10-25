@@ -33,6 +33,24 @@ class FundingAwareResearchTests(unittest.TestCase):
         self.assertEqual(result["funding_events_charged"], 1)
         self.assertGreater(result["funding_net_cost_usd"], 0)
 
+
+    def test_make_oos_windows_are_non_overlapping_and_chronological(self):
+        end = 2_000_000_000
+        windows = research.make_oos_windows(end, count=8, window_days=30)
+        self.assertEqual(len(windows), 8)
+        self.assertEqual(windows[0][0], "oos_01")
+        self.assertEqual(windows[-1][0], "oos_08")
+        self.assertEqual(windows[0][1], end - 240 * 86400)
+        self.assertEqual(windows[-1][2], end)
+        for index, (_, lo, hi) in enumerate(windows):
+            self.assertEqual(hi - lo, 30 * 86400)
+            if index:
+                self.assertEqual(windows[index - 1][2], lo)
+
+    def test_make_oos_windows_rejects_zero_count(self):
+        with self.assertRaises(ValueError):
+            research.make_oos_windows(2_000_000_000, count=0)
+
     def test_funding_receipt_offsets_short_position_cost(self):
         candles = [
             {"t": 0, "o": 100, "h": 100.01, "l": 99.99, "c": 100, "v": 100},
