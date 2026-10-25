@@ -10,31 +10,193 @@ from funding_aware_research import fetch_funding_rates, simulate_with_funding
 from hourly_candidate_research import FEE, SLIPPAGE
 
 
+MIN_QUOTE_NOTIONAL_USD = 10.0
+
+
+def max_drawdown_pct(equity):
+    peak = equity[0] if equity else 0.0
+    max_dd = 0.0
+    for value in equity:
+        peak = max(peak, value)
+        if peak > 0:
+            max_dd = max(max_dd, (peak - value) / peak)
+    return round(max_dd * 100, 3)
+
+
 def buy_hold(symbol, candles, start, end, funding, balance):
     bars = [b for b in candles if start <= b["t"] < end]
+    base = {
+        "symbol": symbol, "strategy": "buy_hold_long_1x", "trades": 0,
+        "start_balance": balance, "fees_per_side_pct": FEE * 100,
+        "slippage_per_side_pct": SLIPPAGE * 100,
+        "min_quote_notional_usd": 0.0, "min_quote_check_pass": False,
+        "execution_feasibility": "not_tested", "funding_events_charged": 0,
+        "funding_net_cost_usd": 0.0, "max_drawdown_mtm_pct": 0.0,
+    }
     if len(bars) < 2:
-        return {"symbol": symbol, "trades": 0, "status": "low_sample"}
+        return {**base, "status": "low_sample"}
+
     entry = bars[0]["o"] * (1 + SLIPPAGE)
     exit_price = bars[-1]["c"] * (1 - SLIPPAGE)
     qty = balance / (entry * (1 + FEE))
-    gross = qty * (exit_price - entry)
-    fees = qty * entry * FEE + qty * exit_price * FEE
+    entry_fee = qty * entry * FEE
+    cash_after_entry = balance - qty * entry - entry_fee
     funding_cost = 0.0
     charged = 0
+    equity = [balance]
     for bar in bars[1:]:
         if bar["t"] in funding:
             funding_cost += qty * bar["c"] * funding[bar["t"]]
             charged += 1
-    end_balance = balance + gross - fees - funding_cost
+        liquidation_price = bar["c"] * (1 - SLIPPAGE)
+        liquidation_fee = qty * liquidation_price * FEE
+        equity.append(cash_after_entry + qty * liquidation_price - liquidation_fee - funding_cost)
+
+    exit_fee = qty * exit_price * FEE
+    end_balance = balance + qty * (exit_price - entry) - entry_fee - exit_fee - funding_cost
+    quote_notional = qty * entry
+    quote_minimum_pass = quote_notional >= MIN_QUOTE_NOTIONAL_USD
     return {
-        "symbol": symbol, "trades": 1, "start_balance": balance,
+        **base,
+        "trades": 1,
         "end_balance": round(end_balance, 6),
         "return_pct": round(100 * (end_balance / balance - 1), 3),
         "funding_events_charged": charged,
         "funding_net_cost_usd": round(funding_cost, 8),
+        "max_drawdown_mtm_pct": max_drawdown_pct(equity),
+        "min_quote_notional_usd": round(quote_notional, 6),
+        "min_quote_check_pass": quote_minimum_pass,
+        "execution_feasibility": (
+            "below_min_quote" if not quote_minimum_pass
+            else "quote_minimum_pass_other_constraints_unverified"
+        ),
         "status": "tested",
     }
 
+
+def build_comparison_rows(rows):
+    indexed = {}
+    for row in rows:
+        strategy = row.get("strategy")
+        if strategy not in ("ema_20_50_cross", "buy_hold_long_1x"):
+            continue
+        if row.get("symbol") is None or row.get("window") is None or row.get("start_balance") is None:
+            continue
+        try:
+            balance = float(row["start_balance"])
+            float(row["return_pct"])
+        except (TypeError, ValueError):
+            continue
+        key = (str(row["symbol"]), str(row["window"]), balance)
+        indexed.setdefault(key, {})["benchmark" if row.get("benchmark") else "ema"] = row
+
+    pairs = []
+    for (symbol, window, balance), pair in sorted(indexed.items()):
+        ema = pair.get("ema")
+        bench = pair.get("benchmark")
+        if not ema or not bench:
+            continue
+        try:
+            ema_ret = float(ema["return_pct"])
+            bench_ret = float(bench["return_pct"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        ema_trades = int(float(ema.get("trades", 0) or 0))
+        eligible = ema.get("status") == "tested" and ema_trades >= 5
+        pairs.append({
+            "symbol": symbol,
+            "window": window,
+            "start_balance": balance,
+            "ema_status": ema.get("status", ""),
+            "ema_trades": ema_trades,
+            "ema_return_pct": ema_ret,
+            "ema_max_drawdown_mtm_pct": ema.get("max_drawdown_mtm_pct", ""),
+            "ema_profit_factor": ema.get("profit_factor", ""),
+            "benchmark_return_pct": bench_ret,
+            "benchmark_max_drawdown_mtm_pct": bench.get("max_drawdown_mtm_pct", ""),
+            "benchmark_funding_net_cost_usd": bench.get("funding_net_cost_usd", ""),
+            "benchmark_min_quote_notional_usd": bench.get("min_quote_notional_usd", ""),
+            "benchmark_min_quote_check_pass": bench.get("min_quote_check_pass", False),
+            "benchmark_execution_feasibility": bench.get("execution_feasibility", ""),
+            "ema_minus_benchmark_pct_points": round(ema_ret - bench_ret, 3),
+            "ema_outperforms_benchmark": ema_ret > bench_ret,
+            "ema_eligible_5plus_trades": eligible,
+        })
+    return pairs
+
+
+def _summarize_pairs(balance, scope, subset):
+    ema_returns = [float(x["ema_return_pct"]) for x in subset]
+    benchmark_returns = [float(x["benchmark_return_pct"]) for x in subset]
+    excess = [float(x["ema_minus_benchmark_pct_points"]) for x in subset]
+    ema_dd = [float(x["ema_max_drawdown_mtm_pct"]) for x in subset
+              if x.get("ema_max_drawdown_mtm_pct") not in ("", None)]
+    benchmark_dd = [float(x["benchmark_max_drawdown_mtm_pct"]) for x in subset
+                    if x.get("benchmark_max_drawdown_mtm_pct") not in ("", None)]
+    return {
+        "start_balance": balance,
+        "scope": scope,
+        "pairs": len(subset),
+        "ema_mean_return_pct": round(statistics.mean(ema_returns), 3) if ema_returns else "",
+        "ema_median_return_pct": round(statistics.median(ema_returns), 3) if ema_returns else "",
+        "ema_positive_pairs": sum(x > 0 for x in ema_returns),
+        "benchmark_mean_return_pct": round(statistics.mean(benchmark_returns), 3) if benchmark_returns else "",
+        "benchmark_median_return_pct": round(statistics.median(benchmark_returns), 3) if benchmark_returns else "",
+        "benchmark_positive_pairs": sum(x > 0 for x in benchmark_returns),
+        "mean_excess_return_pct_points": round(statistics.mean(excess), 3) if excess else "",
+        "median_excess_return_pct_points": round(statistics.median(excess), 3) if excess else "",
+        "ema_outperforms_benchmark_pairs": sum(bool(x["ema_outperforms_benchmark"]) for x in subset),
+        "ema_eligible_pairs": sum(bool(x["ema_eligible_5plus_trades"]) for x in subset),
+        "mean_ema_mtm_drawdown_pct": round(statistics.mean(ema_dd), 3) if ema_dd else "",
+        "mean_benchmark_mtm_drawdown_pct": round(statistics.mean(benchmark_dd), 3) if benchmark_dd else "",
+    }
+
+
+def write_comparison(rows, out_dir):
+    pairs = build_comparison_rows(rows)
+    detail_fields = [
+        "symbol", "window", "start_balance", "ema_status", "ema_trades",
+        "ema_return_pct", "ema_max_drawdown_mtm_pct", "ema_profit_factor",
+        "benchmark_return_pct", "benchmark_max_drawdown_mtm_pct",
+        "benchmark_funding_net_cost_usd", "benchmark_min_quote_notional_usd",
+        "benchmark_min_quote_check_pass", "benchmark_execution_feasibility",
+        "ema_minus_benchmark_pct_points", "ema_outperforms_benchmark",
+        "ema_eligible_5plus_trades",
+    ]
+    with open(os.path.join(out_dir, "ema_benchmark_comparison.csv"), "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=detail_fields)
+        writer.writeheader()
+        writer.writerows(pairs)
+
+    summaries = []
+    balances = sorted({float(x["start_balance"]) for x in pairs})
+    for balance in balances:
+        balance_rows = [x for x in pairs if float(x["start_balance"]) == balance]
+        eligible_rows = [x for x in balance_rows if x["ema_eligible_5plus_trades"]]
+        summaries.append(_summarize_pairs(balance, "all_pairs_including_low_sample", balance_rows))
+        summaries.append(_summarize_pairs(balance, "ema_eligible_5plus_trades", eligible_rows))
+        for symbol in sorted({x["symbol"] for x in balance_rows}):
+            symbol_rows = [x for x in balance_rows if x["symbol"] == symbol]
+            summaries.append(_summarize_pairs(balance, f"symbol:{symbol}:all", symbol_rows))
+            summaries.append(_summarize_pairs(balance, f"symbol:{symbol}:eligible", [x for x in symbol_rows if x["ema_eligible_5plus_trades"]]))
+        for window in sorted({x["window"] for x in balance_rows}):
+            window_rows = [x for x in balance_rows if x["window"] == window]
+            summaries.append(_summarize_pairs(balance, f"window:{window}:all", window_rows))
+            summaries.append(_summarize_pairs(balance, f"window:{window}:eligible", [x for x in window_rows if x["ema_eligible_5plus_trades"]]))
+
+    summary_fields = [
+        "start_balance", "scope", "pairs", "ema_mean_return_pct", "ema_median_return_pct",
+        "ema_positive_pairs", "benchmark_mean_return_pct", "benchmark_median_return_pct",
+        "benchmark_positive_pairs", "mean_excess_return_pct_points",
+        "median_excess_return_pct_points", "ema_outperforms_benchmark_pairs",
+        "ema_eligible_pairs", "mean_ema_mtm_drawdown_pct",
+        "mean_benchmark_mtm_drawdown_pct",
+    ]
+    with open(os.path.join(out_dir, "ema_benchmark_comparison_summary.csv"), "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=summary_fields)
+        writer.writeheader()
+        writer.writerows(summaries)
+    return pairs, summaries
 
 def main():
     p = argparse.ArgumentParser()
@@ -89,7 +251,8 @@ def main():
         writer = csv.DictWriter(f, fieldnames=["symbol", "error"])
         writer.writeheader()
         writer.writerows(errors)
-    print(f"Rows={len(rows)}, API failures={len(errors)}. Paper-only.")
+    pairs, _ = write_comparison(rows, args.out)
+    print(f"Rows={len(rows)}, paired benchmark rows={len(pairs)}, API failures={len(errors)}. Paper-only.")
     for strategy in ("ema_20_50_cross", "buy_hold_long_1x"):
         for balance in balances:
             subset = [r for r in rows if r.get("strategy") == strategy and r.get("start_balance") == balance and r.get("status") == "tested" and r.get("trades", 0) >= (5 if strategy == "ema_20_50_cross" else 1)]
