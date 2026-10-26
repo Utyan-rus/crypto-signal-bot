@@ -45,6 +45,14 @@ class DonchianBenchmarkTests(unittest.TestCase):
         self.assertFalse(result["min_quote_check_pass"])
         self.assertEqual(result["execution_feasibility"], "below_min_quote")
 
+    def test_buy_hold_drawdown_includes_entry_candle_dip(self):
+        candles = [
+            {"t": 0, "o": 100, "h": 101, "l": 79, "c": 80},
+            {"t": 3600, "o": 80, "h": 111, "l": 79, "c": 110},
+        ]
+        result = buy_hold("BTC", candles, 0, 7200, {}, 100)
+        self.assertGreater(result["max_drawdown_mtm_pct"], 15.0)
+
     def test_cost_scenarios_are_monotonically_more_conservative(self):
         self.assertEqual([x[0] for x in COST_SCENARIOS],
                          ["base_taker", "double_slippage", "double_fee_and_slippage"])
