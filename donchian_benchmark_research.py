@@ -39,8 +39,10 @@ def buy_hold(symbol, candles, start, end, funding, balance, fee_rate=FEE, slippa
     funding_cost, charged = 0.0, 0
     cash_after_entry = balance - qty * entry - entry_fee
     equity = [balance]
-    for bar in bars[1:]:
-        if bar["t"] in funding:
+    for index, bar in enumerate(bars):
+        # The position is opened at bars[0].open, so mark its first candle close too.
+        # Funding at the entry timestamp is excluded, matching the strategy simulator.
+        if index > 0 and bar["t"] in funding:
             funding_cost += qty * bar["c"] * funding[bar["t"]]
             charged += 1
         mark = bar["c"] * (1 - slippage_rate)
