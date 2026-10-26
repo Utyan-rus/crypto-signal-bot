@@ -2,12 +2,25 @@ import unittest
 from unittest.mock import patch
 
 from donchian_benchmark_research import (
-    buy_hold, paired_rows, summarize, COST_SCENARIOS,
+    buy_hold, paired_rows, summarize, COST_SCENARIOS, filter_crypto_markets, normalize_market_symbol,
 )
 from funding_aware_research import make_oos_windows, simulate_with_funding
 
 
 class DonchianBenchmarkTests(unittest.TestCase):
+    def test_crypto_universe_excludes_tokenized_equities_and_fx(self):
+        markets = [
+            {"symbol": "BTC", "id": 1},
+            {"symbol": "AAVE", "id": 2},
+            {"symbol": "AAPL", "id": 3},
+            {"symbol": "AMZN", "id": 4},
+            {"symbol": "EURUSD", "id": 5},
+            {"symbol": "BTC-PERP", "id": 6},
+        ]
+        filtered = filter_crypto_markets(markets)
+        self.assertEqual([m["symbol"] for m in filtered], ["BTC", "AAVE", "BTC-PERP"])
+        self.assertEqual(normalize_market_symbol("BTC-PERP"), "BTC")
+
     def test_pair_requires_trade_and_notional_eligibility(self):
         strategy = {"symbol": "BTC", "status": "tested", "trades": 4,
                     "start_balance": 5, "return_pct": 10, "max_drawdown_mtm_pct": 1}

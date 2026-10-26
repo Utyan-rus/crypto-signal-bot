@@ -1,6 +1,7 @@
 """Paired Donchian 20/10 vs buy-and-hold with identical OOS windows and cost stress. Paper-only."""
 import argparse
 import csv
+import json
 import os
 import statistics
 import time
@@ -11,6 +12,34 @@ from funding_aware_research import fetch_funding_rates, make_oos_windows, simula
 from hourly_candidate_research import FEE, SLIPPAGE
 
 MIN_QUOTE_NOTIONAL_USD = 10.0
+
+# Lighter lists tokenized equities, FX and commodities alongside crypto perps.
+# Keep this research universe explicit and conservative; do not silently mix RWAs into crypto results.
+CRYPTO_RESEARCH_SYMBOLS = frozenset({
+    "0G", "1000BONK", "1000FLOKI", "1000NOT", "1000PEPE", "1000SHIB", "2Z",
+    "AAVE", "ADA", "AERO", "APT", "ARB", "ASTER", "AVAX", "AVNT", "AXS",
+    "AZTEC", "BCH", "BERA", "BIO", "BNB", "BOT", "BTC", "CASHCAT", "CRO",
+    "CRV", "DASH", "DATA", "DOGE", "DOT", "DYDX", "EDGE", "EIGEN", "ENA",
+    "ETH", "ETHFI", "FARTCOIN", "FIL", "FOLKS", "GMX", "GRAM", "GRASS",
+    "HBAR", "HYPE", "ICP", "JTO", "JUP", "KAITO", "LDO", "LINEA", "LINK",
+    "LIT", "LTC", "MNT", "MON", "MORPHO", "NEAR", "NMR", "ONDO", "PAXG",
+    "PENDLE", "PENGU", "POL", "POPCAT", "PROVE", "PUMP", "PYTH", "QNT",
+    "RAY", "RIVER", "S", "SEI", "SKY", "SKR", "SOL", "STABLE", "STBL",
+    "STRK", "SUI", "SYRUP", "TAO", "TIA", "TRUMP", "TRX", "UNI", "USELESS",
+    "VIRTUAL", "VVV", "WEN", "WIF", "WLD", "WLFI", "XLM", "XMR", "XPL",
+    "XRP", "ZEC", "ZK", "ZORA", "ZRO",
+})
+
+
+def normalize_market_symbol(symbol):
+    return str(symbol).upper().replace("-PERP", "").replace("/USDC", "").replace("/USDT", "")
+
+
+def filter_crypto_markets(markets):
+    """Filter venue perps to a versioned, explicit crypto-symbol research universe."""
+    return [market for market in markets
+            if normalize_market_symbol(market.get("symbol", "")) in CRYPTO_RESEARCH_SYMBOLS]
+
 COST_SCENARIOS = (
     ("base_taker", FEE, SLIPPAGE),
     ("double_slippage", FEE, SLIPPAGE * 2),
@@ -174,9 +203,29 @@ def main():
         parser.error("--balances must contain positive values")
     os.makedirs(args.out, exist_ok=True)
     windows = make_oos_windows(end_timestamp, count=args.windows, window_days=args.window_days)
-    markets = get_markets()
+    venue_markets = get_markets()
+    markets = filter_crypto_markets(venue_markets)
     if args.max_markets > 0:
         markets = markets[:args.max_markets]
+    metadata = {
+        "universe_filter": "explicit_crypto_symbol_allowlist_v1",
+        "venue_market_count_before_filter": len(venue_markets),
+        "recognized_crypto_market_count": len(filter_crypto_markets(venue_markets)),
+        "markets_tested": [m["symbol"] for m in markets],
+        "days_of_history_requested": args.days,
+        "oos_window_count": len(windows),
+        "oos_window_days": args.window_days,
+        "oos_coverage_days": len(windows) * args.window_days,
+        "shared_end_timestamp": end_timestamp,
+        "history_start_timestamp": history_start,
+        "minimum_quote_notional_usd": MIN_QUOTE_NOTIONAL_USD,
+        "cost_scenarios": [{"name": name, "fee_per_side": fee, "slippage_per_side": slip}
+                           for name, fee, slip in COST_SCENARIOS],
+        "paper_only": True,
+    }
+    with open(os.path.join(args.out, "run_metadata.json"), "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
+    print(f"Universe=crypto_allowlist venue_markets={len(venue_markets)} recognized_crypto={len(filter_crypto_markets(venue_markets))} tested={len(markets)} symbols={','.join(m['symbol'] for m in markets)}")
     rows, errors = [], []
     for market in markets:
         symbol, market_id = market["symbol"], market["id"]
