@@ -22,7 +22,7 @@ class DonchianBenchmarkTests(unittest.TestCase):
         strategy = {"symbol": "ETH", "status": "tested", "trades": 8, "start_balance": 50,
                     "return_pct": 3, "max_drawdown_mtm_pct": 4, "profit_factor": 1.2,
                     "fees_per_side_pct": 0.05, "slippage_per_side_pct": 0.05}
-        benchmark = {"symbol": "ETH", "status": "tested", "trades": 1, "return_pct": 1,
+        benchmark = {"symbol": "ETH", "status": "tested", "trades": 1, "return_pct": 1, "start_balance": 50,
                      "min_quote_check_pass": True, "min_quote_notional_usd": 49,
                      "max_drawdown_mtm_pct": 6}
         row = paired_rows(strategy, benchmark, "oos_01", 100, 200, 200, "base_taker")
