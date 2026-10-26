@@ -35,6 +35,7 @@ class DonchianBenchmarkTests(unittest.TestCase):
         self.assertEqual(summary["mean_strategy_profit_factor"], 1.2)
         self.assertEqual(row["window_start_utc"], 100)
         self.assertEqual(row["window_end_utc"], 200)
+        self.assertEqual(row["shared_end_timestamp"], 200)
 
     def test_small_balance_is_below_minimum_notional(self):
         candles = [
@@ -61,9 +62,10 @@ class DonchianBenchmarkTests(unittest.TestCase):
 
     def test_oos_windows_are_contiguous_and_share_exact_end_timestamp(self):
         end = 1_800_000_000
-        windows = make_oos_windows(end, count=8, window_days=30)
+        windows = make_oos_windows(end, count=12, window_days=30)
         self.assertEqual(windows[-1][2], end)
-        self.assertEqual(windows[0][1], end - 240 * 86400)
+        self.assertEqual(len(windows), 12)
+        self.assertEqual(windows[0][1], end - 360 * 86400)
         for previous, current in zip(windows, windows[1:]):
             self.assertEqual(previous[2], current[1])
             self.assertEqual(previous[2] - previous[1], 30 * 86400)

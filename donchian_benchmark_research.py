@@ -156,7 +156,7 @@ def write_csv(path, rows, fallback_fields=()):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--days", type=int, default=365)
-    parser.add_argument("--windows", type=int, default=8)
+    parser.add_argument("--windows", type=int, default=12)
     parser.add_argument("--window-days", type=int, default=30)
     parser.add_argument("--max-markets", type=int, default=10)
     parser.add_argument("--balances", default="5,50,100")
