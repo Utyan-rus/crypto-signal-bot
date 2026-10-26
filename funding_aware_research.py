@@ -51,12 +51,18 @@ def make_oos_windows(end_ts, count=2, window_days=30):
     ]
 
 
-def simulate_with_funding(symbol, candles, strategy, test_start, test_end, funding, start_balance=START_BALANCE):
+def simulate_with_funding(symbol, candles, strategy, test_start, test_end, funding,
+                           start_balance=START_BALANCE, fee_rate=None, slippage_rate=None):
+    """Simulate one fixed OOS window; optional costs allow matched stress scenarios."""
+    fee_rate = FEE if fee_rate is None else float(fee_rate)
+    slippage_rate = SLIPPAGE if slippage_rate is None else float(slippage_rate)
+    if fee_rate < 0 or slippage_rate < 0:
+        raise ValueError("fee_rate and slippage_rate must be non-negative")
     signals, exit_levels = build_model(candles, strategy)
     balance, equity, pos, trades = start_balance, [start_balance], None, []
     funding_events = 0
     min_notional_rejections = 0
-    min_notional_usd = 10.0  # Audited Lighter perp metadata: min_quote_amount is $10 for nearly all markets.
+    min_notional_usd = 10.0
     for i in range(1, len(candles)):
         prev, bar = candles[i - 1], candles[i]
         if bar["t"] >= test_end:
@@ -79,9 +85,9 @@ def simulate_with_funding(symbol, candles, strategy, test_start, test_end, fundi
                 elif pos["side"] == "SHORT" and hi is not None and prev["c"] > hi:
                     exit_price, reason = bar["o"], "CHANNEL_EXIT"
             if exit_price is not None:
-                exit_price *= (1-SLIPPAGE if pos["side"] == "LONG" else 1+SLIPPAGE)
+                exit_price *= (1-slippage_rate if pos["side"] == "LONG" else 1+slippage_rate)
                 gross = pos["qty"] * (exit_price-pos["entry"]) * (1 if pos["side"] == "LONG" else -1)
-                pnl = gross - abs(pos["qty"]*exit_price)*FEE - pos["entry_fee"] - pos["funding_cost"]
+                pnl = gross - abs(pos["qty"]*exit_price)*fee_rate - pos["entry_fee"] - pos["funding_cost"]
                 balance += pnl
                 trades.append({"symbol":symbol,"strategy":strategy,"side":pos["side"],
                     "entry_time":pos["entry_time"],"exit_time":bar["t"],"pnl":pnl,
@@ -93,7 +99,7 @@ def simulate_with_funding(symbol, candles, strategy, test_start, test_end, fundi
         fresh = active and (not previous_sig or previous_sig[0] != current_sig[0])
         if pos is None and test_start <= bar["t"] < test_end and fresh and balance > 0:
             side, stop_dist = current_sig
-            entry = bar["o"] * (1+SLIPPAGE if side == "LONG" else 1-SLIPPAGE)
+            entry = bar["o"] * (1+slippage_rate if side == "LONG" else 1-slippage_rate)
             qty = size_position(balance, entry, stop_dist)
             if 0 < qty * entry < min_notional_usd:
                 min_notional_rejections += 1
@@ -101,11 +107,11 @@ def simulate_with_funding(symbol, candles, strategy, test_start, test_end, fundi
             if qty > 0:
                 stop = entry-stop_dist if side == "LONG" else entry+stop_dist
                 pos = {"side":side,"entry":entry,"qty":qty,"stop":stop,
-                    "entry_fee":qty*entry*FEE,"entry_time":bar["t"],"funding_cost":0.0}
+                    "entry_fee":qty*entry*fee_rate,"entry_time":bar["t"],"funding_cost":0.0}
                 hit = bar["l"] <= stop if side == "LONG" else bar["h"] >= stop
                 if hit:
-                    exit_price = stop * (1-SLIPPAGE if side == "LONG" else 1+SLIPPAGE)
-                    pnl = qty*(exit_price-entry)*(1 if side=="LONG" else -1) - abs(qty*exit_price)*FEE - pos["entry_fee"]
+                    exit_price = stop * (1-slippage_rate if side=="LONG" else 1+slippage_rate)
+                    pnl = qty*(exit_price-entry)*(1 if side=="LONG" else -1) - abs(qty*exit_price)*fee_rate - pos["entry_fee"]
                     trades.append({"symbol":symbol,"strategy":strategy,"side":side,
                         "entry_time":bar["t"],"exit_time":bar["t"],"pnl":pnl,
                         "funding_cost":0.0,"reason":"SAME_BAR_SL"})
@@ -115,12 +121,12 @@ def simulate_with_funding(symbol, candles, strategy, test_start, test_end, fundi
         if pos:
             mark = bar["c"]
             gross = pos["qty"]*(mark-pos["entry"])*(1 if pos["side"]=="LONG" else -1)
-            mtm += gross - abs(pos["qty"]*mark)*(FEE+SLIPPAGE) - pos["entry_fee"] - pos["funding_cost"]
+            mtm += gross - abs(pos["qty"]*mark)*(fee_rate+slippage_rate) - pos["entry_fee"] - pos["funding_cost"]
         equity.append(max(0.0, mtm))
     if pos:
         bar = next((b for b in reversed(candles) if b["t"] < test_end), candles[-1])
-        exit_price = bar["c"] * (1-SLIPPAGE if pos["side"]=="LONG" else 1+SLIPPAGE)
-        pnl = pos["qty"]*(exit_price-pos["entry"])*(1 if pos["side"]=="LONG" else -1) - abs(pos["qty"]*exit_price)*FEE - pos["entry_fee"] - pos["funding_cost"]
+        exit_price = bar["c"] * (1-slippage_rate if pos["side"]=="LONG" else 1+slippage_rate)
+        pnl = pos["qty"]*(exit_price-pos["entry"])*(1 if pos["side"]=="LONG" else -1) - abs(pos["qty"]*exit_price)*fee_rate - pos["entry_fee"] - pos["funding_cost"]
         balance += pnl
         trades.append({"symbol":symbol,"strategy":strategy,"side":pos["side"],
             "entry_time":pos["entry_time"],"exit_time":bar["t"],"pnl":pnl,
@@ -135,8 +141,8 @@ def simulate_with_funding(symbol, candles, strategy, test_start, test_end, fundi
         "funding_events_charged":funding_events,
         "funding_net_cost_usd":round(sum(t.get("funding_cost",0) for t in trades),8),
         "funding_history_rows":len(funding),"min_notional_rejections":min_notional_rejections,
-        "fees_per_side_pct":FEE*100,
-        "slippage_per_side_pct":SLIPPAGE*100,"min_notional_assumption_usd":10.0,
+        "fees_per_side_pct":fee_rate*100,
+        "slippage_per_side_pct":slippage_rate*100,"min_notional_assumption_usd":10.0,
         "status":"tested" if len(trades)>=5 else "low_sample"}
 
 def main():
