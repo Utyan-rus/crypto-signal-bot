@@ -12,7 +12,7 @@ class DonchianBenchmarkTests(unittest.TestCase):
         strategy = {"symbol": "BTC", "status": "tested", "trades": 4,
                     "start_balance": 5, "return_pct": 10, "max_drawdown_mtm_pct": 1}
         benchmark = {"symbol": "BTC", "status": "tested", "trades": 1,
-                     "return_pct": -10, "min_quote_check_pass": False, "min_quote_notional_usd": 5}
+                     "return_pct": -10, "start_balance": 5, "min_quote_check_pass": False, "min_quote_notional_usd": 5}
         row = paired_rows(strategy, benchmark, "oos_01", 0, 100, 100, "base_taker")
         self.assertFalse(row["paired_evaluable"])
         self.assertEqual(row["excess_return_pp"], "")
