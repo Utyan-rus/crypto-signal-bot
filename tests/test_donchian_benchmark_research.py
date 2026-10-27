@@ -50,6 +50,55 @@ class DonchianBenchmarkTests(unittest.TestCase):
         self.assertEqual(row["window_end_utc"], 200)
         self.assertEqual(row["shared_end_timestamp"], 200)
 
+    def test_low_sample_rows_count_in_unconditional_metrics_and_cash_baseline(self):
+        low = paired_rows(
+            {"symbol": "ETH", "status": "low_sample", "trades": 2, "start_balance": 50,
+             "return_pct": -2.0, "max_drawdown_mtm_pct": 3.0, "profit_factor": 0.5},
+            {"symbol": "ETH", "status": "tested", "trades": 1, "start_balance": 50,
+             "return_pct": -5.0, "min_quote_check_pass": True, "min_quote_notional_usd": 49,
+             "max_drawdown_mtm_pct": 8.0},
+            "oos_01", 0, 100, 100, "base_taker",
+        )
+        regular = paired_rows(
+            {"symbol": "ETH", "status": "tested", "trades": 6, "start_balance": 50,
+             "return_pct": 1.0, "max_drawdown_mtm_pct": 2.0, "profit_factor": 1.2},
+            {"symbol": "ETH", "status": "tested", "trades": 1, "start_balance": 50,
+             "return_pct": -1.0, "min_quote_check_pass": True, "min_quote_notional_usd": 49,
+             "max_drawdown_mtm_pct": 4.0},
+            "oos_02", 100, 200, 200, "base_taker",
+        )
+        self.assertFalse(low["paired_evaluable"])
+        self.assertTrue(low["benchmark_executable"])
+        self.assertEqual(low["cash_return_pct"], 0.0)
+        self.assertEqual(low["strategy_excess_vs_cash_pp"], -2.0)
+        summary = summarize([low, regular], ("start_balance", "cost_scenario"))[0]
+        self.assertEqual(summary["paired_count"], 1)
+        self.assertEqual(summary["strategy_observed_rows"], 2)
+        self.assertEqual(summary["strategy_active_windows"], 2)
+        self.assertEqual(summary["strategy_all_rows_mean_return_pct"], -0.5)
+        self.assertEqual(summary["strategy_all_rows_median_return_pct"], -0.5)
+        self.assertEqual(summary["strategy_all_rows_wins_vs_cash"], 1)
+        self.assertEqual(summary["benchmark_executable_rows"], 2)
+        self.assertEqual(summary["observed_strategy_vs_benchmark_mean_excess_pp"], 2.5)
+        self.assertEqual(summary["mean_excess_return_pp"], 2.0)
+
+    def test_below_minimum_benchmark_is_not_in_observed_benchmark_metrics(self):
+        row = paired_rows(
+            {"symbol": "BTC", "status": "low_sample", "trades": 0, "start_balance": 5,
+             "return_pct": 0.0, "max_drawdown_mtm_pct": 0.0, "profit_factor": 0.0},
+            {"symbol": "BTC", "status": "tested", "trades": 1, "start_balance": 5,
+             "return_pct": -10.0, "min_quote_check_pass": False, "min_quote_notional_usd": 5,
+             "max_drawdown_mtm_pct": 20.0},
+            "oos_01", 0, 100, 100, "base_taker",
+        )
+        summary = summarize([row], ("start_balance", "cost_scenario"))[0]
+        self.assertFalse(row["benchmark_executable"])
+        self.assertEqual(summary["strategy_all_rows_mean_return_pct"], 0.0)
+        self.assertEqual(summary["strategy_all_rows_wins_vs_cash"], 0)
+        self.assertEqual(summary["benchmark_executable_rows"], 0)
+        self.assertEqual(summary["observed_strategy_vs_benchmark_mean_excess_pp"], "")
+        self.assertEqual(summary["paired_count"], 0)
+
     def test_small_balance_is_below_minimum_notional(self):
         candles = [
             {"t": 0, "o": 100, "h": 101, "l": 99, "c": 100},
