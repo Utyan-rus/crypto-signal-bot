@@ -102,6 +102,7 @@ def paired_rows(strategy, benchmark, window, window_start, window_end, end_times
     sret = float(strategy.get("return_pct", 0) or 0)
     bret = float(benchmark.get("return_pct", 0) or 0)
     trades = int(strategy.get("trades", 0) or 0)
+    strategy_observed = strategy.get("status") in ("tested", "low_sample")
     strategy_ok = strategy.get("status") == "tested" and trades >= 5
     benchmark_ok = benchmark.get("status") == "tested" and bool(benchmark.get("min_quote_check_pass"))
     paired = strategy_ok and benchmark_ok
@@ -122,6 +123,18 @@ def paired_rows(strategy, benchmark, window, window_start, window_end, end_times
         "benchmark_funding_events": benchmark.get("funding_events_charged", ""),
         "benchmark_notional_usd": benchmark.get("min_quote_notional_usd", ""),
         "benchmark_min_notional_pass": benchmark.get("min_quote_check_pass", False),
+        "strategy_return_observed": strategy_observed,
+        "strategy_active_trade": trades > 0,
+        "cash_return_pct": 0.0,
+        "strategy_excess_vs_cash_pp": round(sret, 3) if strategy_observed else "",
+        "benchmark_executable": benchmark_ok,
+        "observed_excess_return_vs_benchmark_pp": (
+            round(sret - bret, 3) if strategy_observed and benchmark_ok else ""
+        ),
+        "strategy_beats_cash": sret > 0 if strategy_observed else False,
+        "strategy_beats_benchmark_observed": (
+            sret > bret if strategy_observed and benchmark_ok else False
+        ),
         "strategy_eligible_5plus_trades": strategy_ok, "benchmark_eligible": benchmark_ok,
         "paired_evaluable": paired,
         "excess_return_pp": round(sret - bret, 3) if paired else "",
@@ -148,6 +161,22 @@ def summarize(rows, group_keys):
         trades = [int(r["strategy_trades"]) for r in pairs]
         wins = sum(bool(r["strategy_beats_benchmark"]) for r in pairs)
         positive = sum(v > 0 for v in strategy_returns)
+        observed = [r for r in group if r.get("strategy_return_observed")]
+        executable_benchmarks = [r for r in observed if r.get("benchmark_executable")]
+        observed_returns = [float(r["strategy_return_pct"]) for r in observed]
+        observed_excess_cash = [float(r["strategy_excess_vs_cash_pp"]) for r in observed
+                                if r["strategy_excess_vs_cash_pp"] not in ("", None)]
+        observed_excess_benchmark = [
+            float(r["observed_excess_return_vs_benchmark_pp"]) for r in executable_benchmarks
+            if r["observed_excess_return_vs_benchmark_pp"] not in ("", None)
+        ]
+        observed_strategy_dd = [
+            float(r["strategy_mtm_drawdown_pct"]) for r in observed
+            if r["strategy_mtm_drawdown_pct"] not in ("", None)
+        ]
+        observed_active = [r for r in observed if int(r.get("strategy_trades", 0) or 0) > 0]
+        observed_wins_benchmark = sum(bool(r["strategy_beats_benchmark_observed"])
+                                      for r in executable_benchmarks)
         row = dict(zip(group_keys, key))
         row.update({
             "rows": len(group), "paired_count": len(pairs),
@@ -169,6 +198,56 @@ def summarize(rows, group_keys):
             "median_strategy_profit_factor": round(statistics.median(pf), 3) if pf else "",
             "total_strategy_trades": sum(trades),
             "mean_strategy_trades": round(statistics.mean(trades), 2) if trades else "",
+            # Unconditional metrics include every observed OOS row, including low-sample
+            # and zero-trade rows; zero trades are cash/no-trade, not silently discarded.
+            "strategy_observed_rows": len(observed),
+            "strategy_active_windows": len(observed_active),
+            "strategy_no_trade_windows": sum(int(r.get("strategy_trades", 0) or 0) == 0 for r in observed),
+            "strategy_all_rows_mean_return_pct": (
+                round(statistics.mean(observed_returns), 3) if observed_returns else ""
+            ),
+            "strategy_all_rows_median_return_pct": (
+                round(statistics.median(observed_returns), 3) if observed_returns else ""
+            ),
+            "strategy_all_rows_positive_windows": sum(v > 0 for v in observed_returns),
+            "strategy_all_rows_positive_fraction_pct": (
+                round(100 * sum(v > 0 for v in observed_returns) / len(observed_returns), 2)
+                if observed_returns else ""
+            ),
+            "strategy_all_rows_mean_excess_vs_cash_pp": (
+                round(statistics.mean(observed_excess_cash), 3) if observed_excess_cash else ""
+            ),
+            "strategy_all_rows_median_excess_vs_cash_pp": (
+                round(statistics.median(observed_excess_cash), 3) if observed_excess_cash else ""
+            ),
+            "strategy_all_rows_wins_vs_cash": sum(v > 0 for v in observed_returns),
+            "all_rows_total_strategy_trades": sum(int(r.get("strategy_trades", 0) or 0) for r in observed),
+            "all_rows_mean_strategy_mtm_dd_pct": (
+                round(statistics.mean(observed_strategy_dd), 3) if observed_strategy_dd else ""
+            ),
+            "all_rows_median_strategy_mtm_dd_pct": (
+                round(statistics.median(observed_strategy_dd), 3) if observed_strategy_dd else ""
+            ),
+            "benchmark_executable_rows": len(executable_benchmarks),
+            "benchmark_executable_mean_return_pct": (
+                round(statistics.mean(float(r["benchmark_return_pct"]) for r in executable_benchmarks), 3)
+                if executable_benchmarks else ""
+            ),
+            "benchmark_executable_median_return_pct": (
+                round(statistics.median(float(r["benchmark_return_pct"]) for r in executable_benchmarks), 3)
+                if executable_benchmarks else ""
+            ),
+            "observed_strategy_vs_benchmark_mean_excess_pp": (
+                round(statistics.mean(observed_excess_benchmark), 3) if observed_excess_benchmark else ""
+            ),
+            "observed_strategy_vs_benchmark_median_excess_pp": (
+                round(statistics.median(observed_excess_benchmark), 3) if observed_excess_benchmark else ""
+            ),
+            "observed_strategy_wins_vs_benchmark": observed_wins_benchmark,
+            "observed_strategy_win_fraction_vs_benchmark_pct": (
+                round(100 * observed_wins_benchmark / len(executable_benchmarks), 2)
+                if executable_benchmarks else ""
+            ),
         })
         result.append(row)
     return result
