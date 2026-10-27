@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from donchian_benchmark_research import (
     buy_hold, paired_rows, summarize, COST_SCENARIOS, filter_crypto_markets, normalize_market_symbol,
+    calculate_warmup_days, validate_oos_history,
 )
 from funding_aware_research import make_oos_windows, simulate_with_funding
 
@@ -121,6 +122,22 @@ class DonchianBenchmarkTests(unittest.TestCase):
                          ["base_taker", "double_slippage", "double_fee_and_slippage"])
         self.assertLess(COST_SCENARIOS[0][1], COST_SCENARIOS[2][1])
         self.assertLess(COST_SCENARIOS[0][2], COST_SCENARIOS[1][2])
+
+    def test_history_request_reserves_indicator_warmup(self):
+        self.assertEqual(calculate_warmup_days(400, 12, 30), 40)
+        with self.assertRaisesRegex(ValueError, "indicator warm-up"):
+            calculate_warmup_days(365, 12, 30)
+
+    def test_oos_history_requires_warmup_and_coverage_in_every_window(self):
+        windows = make_oos_windows(1_800_000_000, count=2, window_days=1)
+        first_start = windows[0][1]
+        candles = [{"t": ts} for ts in range(first_start - 200 * 3600, windows[-1][2], 3600)]
+        self.assertEqual(validate_oos_history(candles, windows), [])
+        sparse = [c for c in candles if not (windows[1][1] <= c["t"] < windows[1][1] + 5 * 3600)]
+        errors = validate_oos_history(sparse, windows)
+        self.assertTrue(any(error.startswith("oos_02_bars:") for error in errors))
+        short_warmup = [c for c in candles if c["t"] >= first_start - 100 * 3600]
+        self.assertTrue(any(error.startswith("warmup_bars:") for error in validate_oos_history(short_warmup, windows)))
 
     def test_oos_windows_are_contiguous_and_share_exact_end_timestamp(self):
         end = 1_800_000_000

@@ -261,9 +261,36 @@ def write_csv(path, rows, fallback_fields=()):
         writer.writerows(rows)
 
 
+def calculate_warmup_days(days, window_count, window_days, minimum=30):
+    """Require a pre-OOS history buffer before the first fixed test window."""
+    warmup_days = int(days) - int(window_count) * int(window_days)
+    if warmup_days < minimum:
+        raise ValueError(
+            f"Need at least {minimum} days of pre-OOS indicator warm-up; "
+            f"requested history leaves {warmup_days} days."
+        )
+    return warmup_days
+
+
+def validate_oos_history(candles, windows, min_warmup_bars=200, min_window_coverage=0.90):
+    """Require indicator warm-up and adequate hourly candle coverage in every OOS window."""
+    timestamps = sorted({int(c["t"]) for c in candles if "t" in c})
+    if not windows:
+        return ["no_oos_windows"]
+    errors = []
+    warmup_bars = sum(ts < windows[0][1] for ts in timestamps)
+    if warmup_bars < min_warmup_bars:
+        errors.append(f"warmup_bars:{warmup_bars}<{min_warmup_bars}")
+    for name, start, end in windows:
+        expected = max(0, int((end - start) // 3600))
+        actual = sum(start <= ts < end for ts in timestamps)
+        if expected == 0 or actual < expected * min_window_coverage:
+            errors.append(f"{name}_bars:{actual}/{expected}")
+    return errors
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--days", type=int, default=365)
+    parser.add_argument("--days", type=int, default=400)
     parser.add_argument("--windows", type=int, default=12)
     parser.add_argument("--window-days", type=int, default=30)
     parser.add_argument("--max-markets", type=int, default=10)
@@ -273,8 +300,10 @@ def main():
     args = parser.parse_args()
     if args.days < 1 or args.windows < 1 or args.window_days < 1:
         parser.error("--days, --windows and --window-days must be positive")
-    if args.windows * args.window_days > args.days:
-        parser.error("OOS windows cannot exceed the requested history length")
+    try:
+        warmup_days = calculate_warmup_days(args.days, args.windows, args.window_days, minimum=30)
+    except ValueError as exc:
+        parser.error(str(exc))
     end_timestamp = args.end_timestamp or int(time.time())
     history_start = end_timestamp - args.days * 86400
     balances = [float(x.strip()) for x in args.balances.split(",") if x.strip()]
@@ -292,6 +321,9 @@ def main():
         "recognized_crypto_market_count": len(filter_crypto_markets(venue_markets)),
         "markets_tested": [m["symbol"] for m in markets],
         "days_of_history_requested": args.days,
+        "warmup_days_available": warmup_days,
+        "minimum_warmup_bars": 200,
+        "minimum_oos_candle_coverage_fraction": 0.90,
         "oos_window_count": len(windows),
         "oos_window_days": args.window_days,
         "oos_coverage_days": len(windows) * args.window_days,
@@ -311,8 +343,9 @@ def main():
         try:
             candles = fetch_candles(market_id, "1h", history_start, end_timestamp)
             funding = fetch_funding_rates(market_id, history_start, end_timestamp)
-            if len(candles) < args.days * 24 * 0.8:
-                errors.append({"symbol": symbol, "error": f"incomplete_candles:{len(candles)}"})
+            coverage_errors = validate_oos_history(candles, windows)
+            if coverage_errors:
+                errors.append({"symbol": symbol, "error": "insufficient_oos_history:" + ";".join(coverage_errors)})
                 continue
             if not funding:
                 errors.append({"symbol": symbol, "error": "missing_funding_history"})
