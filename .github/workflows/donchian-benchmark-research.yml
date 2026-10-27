@@ -13,9 +13,9 @@ on:
       max_markets:
         description: "Markets to test"
         required: true
-        default: "25"
+        default: "100"
         type: choice
-        options: ["5", "10", "25"]
+        options: ["5", "10", "25", "50", "100"]
 
 permissions:
   contents: read
@@ -37,10 +37,10 @@ jobs:
         run: |
           python -m compileall -q donchian_benchmark_research.py funding_aware_research.py hourly_candidate_research.py
           python -m unittest discover -s tests -p 'test_donchian_benchmark_research.py' -v
-      - name: Run paired 360-day OOS Donchian vs buy-and-hold research
+      - name: Run paired 360-day OOS Donchian vs buy-and-hold across crypto allowlist
         run: |
           END_TS=$(date -u +%s)
-          python donchian_benchmark_research.py --days 400 --windows 12 --window-days 30 --max-markets "${{ inputs.max_markets || '25' }}" --balances 5,50,100 --end-timestamp "$END_TS" --out donchian-benchmark-results
+          python donchian_benchmark_research.py --days 400 --windows 12 --window-days 30 --max-markets "${{ inputs.max_markets || '100' }}" --balances 5,50,100 --end-timestamp "$END_TS" --out donchian-benchmark-results
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -22,7 +22,7 @@ CRYPTO_RESEARCH_SYMBOLS = frozenset({
     "CRV", "DASH", "DATA", "DOGE", "DOT", "DYDX", "EDGE", "EIGEN", "ENA",
     "ETH", "ETHFI", "FARTCOIN", "FIL", "FOLKS", "GMX", "GRAM", "GRASS",
     "HBAR", "HYPE", "ICP", "JTO", "JUP", "KAITO", "LDO", "LINEA", "LINK",
-    "LIT", "LTC", "MNT", "MON", "MORPHO", "NEAR", "NMR", "ONDO", "PAXG",
+    "LIT", "LTC", "MNT", "MON", "MORPHO", "NEAR", "NMR", "ONDO",
     "PENDLE", "PENGU", "POL", "POPCAT", "PROVE", "PUMP", "PYTH", "QNT",
     "RAY", "RIVER", "S", "SEI", "SKY", "SKR", "SOL", "STABLE", "STBL",
     "STRK", "SUI", "SYRUP", "TAO", "TIA", "TRUMP", "TRX", "UNI", "USELESS",
@@ -293,7 +293,7 @@ def main():
     parser.add_argument("--days", type=int, default=400)
     parser.add_argument("--windows", type=int, default=12)
     parser.add_argument("--window-days", type=int, default=30)
-    parser.add_argument("--max-markets", type=int, default=10)
+    parser.add_argument("--max-markets", type=int, default=100)
     parser.add_argument("--balances", default="5,50,100")
     parser.add_argument("--end-timestamp", type=int, default=0)
     parser.add_argument("--out", default="donchian-benchmark-results")
@@ -316,7 +316,8 @@ def main():
     if args.max_markets > 0:
         markets = markets[:args.max_markets]
     metadata = {
-        "universe_filter": "explicit_crypto_symbol_allowlist_v1",
+        "universe_filter": "explicit_crypto_symbol_allowlist_v2_excludes_tokenized_commodity",
+        "excluded_rwa_symbol_examples": ["AAPL", "AMZN", "EURUSD", "GBPUSD", "NVDA", "PAXG", "TSLA", "XAG", "XAU"],
         "venue_market_count_before_filter": len(venue_markets),
         "recognized_crypto_market_count": len(filter_crypto_markets(venue_markets)),
         "markets_tested": [m["symbol"] for m in markets],

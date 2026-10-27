@@ -17,6 +17,8 @@ class DonchianBenchmarkTests(unittest.TestCase):
             {"symbol": "AMZN", "id": 4},
             {"symbol": "EURUSD", "id": 5},
             {"symbol": "BTC-PERP", "id": 6},
+            {"symbol": "PAXG", "id": 7},
+            {"symbol": "XAU", "id": 8},
         ]
         filtered = filter_crypto_markets(markets)
         self.assertEqual([m["symbol"] for m in filtered], ["BTC", "AAVE", "BTC-PERP"])
