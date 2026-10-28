@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from donchian_benchmark_research import (
-    buy_hold, paired_rows, summarize, COST_SCENARIOS, filter_crypto_markets, normalize_market_symbol,
+    buy_hold, paired_rows, summarize, COST_SCENARIOS, filter_crypto_markets, normalize_market_symbol, select_research_markets,
     calculate_warmup_days, validate_oos_history,
 )
 from funding_aware_research import make_oos_windows, simulate_with_funding
@@ -23,6 +23,25 @@ class DonchianBenchmarkTests(unittest.TestCase):
         filtered = filter_crypto_markets(markets)
         self.assertEqual([m["symbol"] for m in filtered], ["BTC", "AAVE", "BTC-PERP"])
         self.assertEqual(normalize_market_symbol("BTC-PERP"), "BTC")
+
+    def test_explicit_major_cohort_is_ordered_and_excludes_rwa(self):
+        markets = [
+            {"symbol": "ETH", "id": 2},
+            {"symbol": "AAPL", "id": 99},
+            {"symbol": "BTC", "id": 1},
+            {"symbol": "SOL", "id": 3},
+        ]
+        selected = select_research_markets(markets, requested_symbols=["BTC", "ETH"], max_markets=100)
+        self.assertEqual([m["symbol"] for m in selected], ["BTC", "ETH"])
+
+    def test_explicit_cohort_rejects_non_allowlisted_or_missing_symbols(self):
+        markets = [{"symbol": "BTC", "id": 1}]
+        with self.assertRaisesRegex(ValueError, "not in crypto allowlist"):
+            select_research_markets(markets, requested_symbols=["AAPL"])
+        with self.assertRaisesRegex(ValueError, "unavailable on venue"):
+            select_research_markets(markets, requested_symbols=["ETH"])
+        with self.assertRaisesRegex(ValueError, "duplicates"):
+            select_research_markets(markets, requested_symbols=["BTC", "BTC"])
 
     def test_pair_requires_trade_and_notional_eligibility(self):
         strategy = {"symbol": "BTC", "status": "tested", "trades": 4,
