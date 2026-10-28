@@ -40,6 +40,28 @@ def filter_crypto_markets(markets):
     return [market for market in markets
             if normalize_market_symbol(market.get("symbol", "")) in CRYPTO_RESEARCH_SYMBOLS]
 
+
+def select_research_markets(markets, max_markets=0, requested_symbols=None):
+    """Select a fixed cohort without silently admitting non-crypto venue markets."""
+    filtered = filter_crypto_markets(markets)
+    if requested_symbols:
+        requested = [normalize_market_symbol(s.strip()) for s in requested_symbols if s.strip()]
+        if not requested:
+            raise ValueError("requested_symbols must contain at least one symbol")
+        if len(requested) != len(set(requested)):
+            raise ValueError("requested_symbols contains duplicates")
+        not_allowlisted = [s for s in requested if s not in CRYPTO_RESEARCH_SYMBOLS]
+        if not_allowlisted:
+            raise ValueError("symbols not in crypto allowlist: " + ",".join(not_allowlisted))
+        by_symbol = {normalize_market_symbol(m.get("symbol", "")): m for m in filtered}
+        unavailable = [s for s in requested if s not in by_symbol]
+        if unavailable:
+            raise ValueError("requested crypto markets unavailable on venue: " + ",".join(unavailable))
+        filtered = [by_symbol[s] for s in requested]
+    if max_markets > 0:
+        filtered = filtered[:max_markets]
+    return filtered
+
 COST_SCENARIOS = (
     ("base_taker", FEE, SLIPPAGE),
     ("double_slippage", FEE, SLIPPAGE * 2),
@@ -294,6 +316,7 @@ def main():
     parser.add_argument("--windows", type=int, default=12)
     parser.add_argument("--window-days", type=int, default=30)
     parser.add_argument("--max-markets", type=int, default=100)
+    parser.add_argument("--symbols", default="", help="Optional explicit comma-separated crypto cohort")
     parser.add_argument("--balances", default="5,50,100")
     parser.add_argument("--end-timestamp", type=int, default=0)
     parser.add_argument("--out", default="donchian-benchmark-results")
@@ -312,11 +335,16 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     windows = make_oos_windows(end_timestamp, count=args.windows, window_days=args.window_days)
     venue_markets = get_markets()
-    markets = filter_crypto_markets(venue_markets)
-    if args.max_markets > 0:
-        markets = markets[:args.max_markets]
+    requested_symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
+    try:
+        markets = select_research_markets(
+            venue_markets, max_markets=args.max_markets, requested_symbols=requested_symbols)
+    except ValueError as exc:
+        parser.error(str(exc))
     metadata = {
         "universe_filter": "explicit_crypto_symbol_allowlist_v2_excludes_tokenized_commodity",
+        "selection_mode": "explicit_symbols" if requested_symbols else "allowlist_prefix",
+        "requested_symbols": [normalize_market_symbol(s) for s in requested_symbols],
         "excluded_rwa_symbol_examples": ["AAPL", "AMZN", "EURUSD", "GBPUSD", "NVDA", "PAXG", "TSLA", "XAG", "XAU"],
         "venue_market_count_before_filter": len(venue_markets),
         "recognized_crypto_market_count": len(filter_crypto_markets(venue_markets)),
