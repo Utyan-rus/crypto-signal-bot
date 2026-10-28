@@ -10,12 +10,12 @@ on:
       - ".github/workflows/donchian-benchmark-research.yml"
   workflow_dispatch:
     inputs:
-      max_markets:
-        description: "Markets to test"
+      cohort:
+        description: "Predeclared research cohort"
         required: true
-        default: "100"
+        default: "majors10"
         type: choice
-        options: ["5", "10", "25", "50", "100"]
+        options: ["majors10", "full_crypto"]
 
 permissions:
   contents: read
@@ -37,10 +37,18 @@ jobs:
         run: |
           python -m compileall -q donchian_benchmark_research.py funding_aware_research.py hourly_candidate_research.py
           python -m unittest discover -s tests -p 'test_donchian_benchmark_research.py' -v
-      - name: Run paired 360-day OOS Donchian vs buy-and-hold across crypto allowlist
+      - name: Run paired 360-day OOS Donchian vs buy-and-hold on predeclared cohort
         run: |
           END_TS=$(date -u +%s)
-          python donchian_benchmark_research.py --days 400 --windows 12 --window-days 30 --max-markets "${{ inputs.max_markets || '100' }}" --balances 5,50,100 --end-timestamp "$END_TS" --out donchian-benchmark-results
+          COHORT="${{ inputs.cohort || 'majors10' }}"
+          if [ "$COHORT" = "majors10" ]; then
+            python donchian_benchmark_research.py --days 400 --windows 12 --window-days 30 --max-markets 100 --symbols "BTC,ETH,SOL,BNB,XRP,DOGE,ADA,AVAX,LINK,LTC" --balances 5,50,100 --end-timestamp "$END_TS" --out donchian-benchmark-results
+          elif [ "$COHORT" = "full_crypto" ]; then
+            python donchian_benchmark_research.py --days 400 --windows 12 --window-days 30 --max-markets 100 --balances 5,50,100 --end-timestamp "$END_TS" --out donchian-benchmark-results
+          else
+            echo "Unknown cohort: $COHORT" >&2
+            exit 2
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
