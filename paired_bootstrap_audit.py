@@ -122,7 +122,7 @@ def validate_rows(rows, metadata):
     }
     if seen != expected_keys:
         raise ValueError("result grid is missing one or more market/window/balance/cost/direction combinations")
-    return windows, window_bounds, balances, costs, symbols, directions    return windows, window_bounds, balances, costs, symbols
+    return windows, window_bounds, balances, costs, symbols, directions
 
 
 def summarize_group(group_rows, windows, window_bounds, balance, cost, direction_mode,
