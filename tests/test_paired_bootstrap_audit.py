@@ -68,7 +68,7 @@ class PairedBootstrapAuditTests(unittest.TestCase):
         large = next(row for row in summary if row["start_balance"] == 50.0)
         self.assertGreater(large["mean_return_ci95_low"], 0.0)
         self.assertGreater(large["excess_vs_benchmark_mean_ci95_low"], 0.0)
-        self.assertEqual(len(detail), 4)
+        self.assertEqual(len(detail), 8)
 
     def test_rejects_symbol_cohort_mismatch_and_incomplete_grid(self):
         rows, metadata = fixture()
