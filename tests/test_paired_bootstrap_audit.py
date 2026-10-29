@@ -18,6 +18,7 @@ def fixture():
         "oos_window_days": 30,
         "shared_end_timestamp": end,
         "cost_scenarios": [{"name": "base_taker"}],
+        "direction_modes": ["BOTH"],
     }
     rows = []
     for window_index, (name, start, stop) in enumerate(windows):
@@ -78,6 +79,24 @@ class PairedBootstrapAuditTests(unittest.TestCase):
             validate_rows(wrong, metadata)
         with self.assertRaisesRegex(ValueError, "incomplete result grid"):
             validate_rows(rows[:-1], metadata)
+
+    def test_direction_modes_are_a_complete_bootstrap_dimension(self):
+        rows, metadata = fixture()
+        metadata["direction_modes"] = ["BOTH", "LONG", "SHORT"]
+        expanded = []
+        for mode in metadata["direction_modes"]:
+            for row in rows:
+                copy = dict(row)
+                copy["direction_mode"] = mode
+                expanded.append(copy)
+        _, _, _, _, _, directions = validate_rows(expanded, metadata)
+        self.assertEqual(directions, ["BOTH", "LONG", "SHORT"])
+        summary, detail = audit_rows(expanded, metadata, replicates=100, block_length=2, seed=4)
+        self.assertEqual(len(summary), 6)
+        self.assertEqual(len(detail), 24)
+        self.assertEqual({row["direction_mode"] for row in summary}, set(directions))
+        with self.assertRaisesRegex(ValueError, "incomplete result grid"):
+            validate_rows(expanded[:-1], metadata)
 
     def test_rejects_noncontiguous_oos_windows(self):
         rows, metadata = fixture()

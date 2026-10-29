@@ -34,6 +34,34 @@ class FundingAwareResearchTests(unittest.TestCase):
         self.assertGreater(result["funding_net_cost_usd"], 0)
 
 
+    def test_direction_mode_keeps_only_requested_side(self):
+        candles = [
+            {"t": i * 3600, "o": 100.0, "h": 100.5, "l": 99.5, "c": 100.0, "v": 100.0}
+            for i in range(7)
+        ]
+        signals = {
+            0: ("LONG", 2.0), 3600: ("SHORT", 2.0), 7200: ("LONG", 2.0),
+            10800: ("SHORT", 2.0), 14400: ("LONG", 2.0), 18000: ("SHORT", 2.0),
+        }
+        exit_levels = {i * 3600: (101.0, 99.0) for i in range(7)}
+        with patch.object(research, "build_model", return_value=(signals, exit_levels)), \
+             patch.object(research, "size_position", return_value=1.0):
+            long_only = research.simulate_with_funding(
+                "TEST", candles, "stub", 0, 25200, {}, start_balance=100.0, direction_mode="LONG")
+            short_only = research.simulate_with_funding(
+                "TEST", candles, "stub", 0, 25200, {}, start_balance=100.0, direction_mode="SHORT")
+            both = research.simulate_with_funding(
+                "TEST", candles, "stub", 0, 25200, {}, start_balance=100.0, direction_mode="BOTH")
+            with self.assertRaisesRegex(ValueError, "direction_mode"):
+                research.simulate_with_funding(
+                    "TEST", candles, "stub", 0, 25200, {}, start_balance=100.0, direction_mode="FLAT")
+        self.assertGreater(long_only["long_trades"], 0)
+        self.assertEqual(long_only["short_trades"], 0)
+        self.assertGreater(short_only["short_trades"], 0)
+        self.assertEqual(short_only["long_trades"], 0)
+        self.assertGreater(both["long_trades"], 0)
+        self.assertGreater(both["short_trades"], 0)
+
     def test_make_oos_windows_are_non_overlapping_and_chronological(self):
         end = 2_000_000_000
         windows = research.make_oos_windows(end, count=8, window_days=30)

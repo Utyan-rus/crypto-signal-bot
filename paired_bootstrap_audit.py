@@ -96,32 +96,37 @@ def validate_rows(rows, metadata):
     actual_costs = {row["cost_scenario"] for row in rows}
     if expected_costs and actual_costs != expected_costs:
         raise ValueError("cost scenarios do not match run metadata")
+    expected_directions = {str(value).upper() for value in metadata.get("direction_modes", ["BOTH"])}
+    actual_directions = {str(row.get("direction_mode", "BOTH")).upper() for row in rows}
+    if not expected_directions or actual_directions != expected_directions:
+        raise ValueError("direction modes do not match run metadata")
 
     balances = sorted({float(row["start_balance"]) for row in rows})
     costs = sorted(actual_costs)
     symbols = sorted(expected_symbols)
-    key_fields = ("symbol", "window", "start_balance", "cost_scenario")
+    directions = sorted(expected_directions)
     seen = set()
     for row in rows:
-        key = tuple(str(row[field]) for field in key_fields)
-        # Normalize numeric balance strings so 50 and 50.0 are the same key.
-        key = (key[0], key[1], float(row[key_fields[2]]), key[3])
+        key = (str(row["symbol"]), str(row["window"]), float(row["start_balance"]),
+               str(row["cost_scenario"]), str(row.get("direction_mode", "BOTH")).upper())
         if key in seen:
             raise ValueError(f"duplicate result row: {key}")
         seen.add(key)
-    expected_count = len(symbols) * len(windows) * len(balances) * len(costs)
+    expected_count = len(symbols) * len(windows) * len(balances) * len(costs) * len(directions)
     if len(rows) != expected_count:
         raise ValueError(f"incomplete result grid: got {len(rows)} rows, expected {expected_count}")
     expected_keys = {
-        (symbol, window, balance, cost)
-        for symbol in symbols for window in windows for balance in balances for cost in costs
+        (symbol, window, balance, cost, direction)
+        for symbol in symbols for window in windows for balance in balances
+        for cost in costs for direction in directions
     }
     if seen != expected_keys:
-        raise ValueError("result grid is missing one or more market/window/balance/cost combinations")
-    return windows, window_bounds, balances, costs, symbols
+        raise ValueError("result grid is missing one or more market/window/balance/cost/direction combinations")
+    return windows, window_bounds, balances, costs, symbols, directions    return windows, window_bounds, balances, costs, symbols
 
 
-def summarize_group(group_rows, windows, window_bounds, balance, cost, replicates, block_length, seed):
+def summarize_group(group_rows, windows, window_bounds, balance, cost, direction_mode,
+                    replicates, block_length, seed):
     by_window = defaultdict(list)
     for row in group_rows:
         by_window[row["window"]].append(row)
@@ -149,7 +154,7 @@ def summarize_group(group_rows, windows, window_bounds, balance, cost, replicate
         start, end = window_bounds[name]
         detail.append({
             "window": name, "window_start_utc": start, "window_end_utc": end,
-            "start_balance": balance, "cost_scenario": cost,
+            "start_balance": balance, "cost_scenario": cost, "direction_mode": direction_mode,
             "markets": len(current),
             "strategy_mean_return_pct": statistics.mean(returns),
             "strategy_median_return_pct": statistics.median(returns),
@@ -226,7 +231,7 @@ def summarize_group(group_rows, windows, window_bounds, balance, cost, replicate
     no_executable = eligible_strategy_rows == 0
 
     summary = {
-        "start_balance": balance, "cost_scenario": cost,
+        "start_balance": balance, "cost_scenario": cost, "direction_mode": direction_mode,
         "markets": len({row["symbol"] for row in group_rows}), "oos_windows": len(windows),
         "market_window_rows": len(group_rows), "eligible_strategy_market_windows": eligible_strategy_rows,
         "active_market_windows": sum(as_int(row.get("strategy_trades")) > 0 for row in group_rows),
@@ -270,21 +275,23 @@ def summarize_group(group_rows, windows, window_bounds, balance, cost, replicate
 def audit_rows(rows, metadata, replicates=10000, block_length=2, seed=20261029):
     if replicates < 100:
         raise ValueError("at least 100 bootstrap replicates are required")
-    windows, bounds, balances, costs, symbols = validate_rows(rows, metadata)
+    windows, bounds, balances, costs, symbols, directions = validate_rows(rows, metadata)
     summaries, details = [], []
     index = 0
     for balance in balances:
         for cost in costs:
-            subset = [
-                row for row in rows
-                if float(row["start_balance"]) == balance and row["cost_scenario"] == cost
-            ]
-            summary, detail = summarize_group(
-                subset, windows, bounds, balance, cost, replicates, block_length, seed + index
-            )
-            summaries.append(summary)
-            details.extend(detail)
-            index += 1
+            for direction_mode in directions:
+                subset = [
+                    row for row in rows
+                    if float(row["start_balance"]) == balance and row["cost_scenario"] == cost
+                    and str(row.get("direction_mode", "BOTH")).upper() == direction_mode
+                ]
+                summary, detail = summarize_group(
+                    subset, windows, bounds, balance, cost, direction_mode,
+                    replicates, block_length, seed + index)
+                summaries.append(summary)
+                details.extend(detail)
+                index += 1
     return summaries, details
 
 
@@ -323,7 +330,7 @@ def main():
     print(f"Bootstrap diagnostic complete: rows={len(rows)} groups={len(summary)} "
           f"replicates={args.replicates} block_length={args.block_length}; historical only.")
     for row in summary:
-        print(f"balance={row['start_balance']:g} cost={row['cost_scenario']}: "
+        print(f"balance={row['start_balance']:g} cost={row['cost_scenario']} direction={row['direction_mode']}: "
               f"mean={row['strategy_mean_return_pct']:+.3f}% "
               f"CI95=[{row['mean_return_ci95_low']},{row['mean_return_ci95_high']}] "
               f"excess_vs_buy_hold={row['excess_vs_benchmark_mean_pp_equal_window']}pp "

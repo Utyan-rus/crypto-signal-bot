@@ -62,6 +62,7 @@ class DonchianBenchmarkTests(unittest.TestCase):
                      "max_drawdown_mtm_pct": 6}
         row = paired_rows(strategy, benchmark, "oos_01", 100, 200, 200, "base_taker")
         self.assertTrue(row["paired_evaluable"])
+        self.assertEqual(row["direction_mode"], "BOTH")
         self.assertEqual(row["excess_return_pp"], 2)
         summary = summarize([row], ("start_balance", "cost_scenario"))[0]
         self.assertEqual(summary["paired_count"], 1)
@@ -71,6 +72,16 @@ class DonchianBenchmarkTests(unittest.TestCase):
         self.assertEqual(row["window_start_utc"], 100)
         self.assertEqual(row["window_end_utc"], 200)
         self.assertEqual(row["shared_end_timestamp"], 200)
+
+    def test_paired_rows_record_explicit_short_direction(self):
+        strategy = {"symbol": "ETH", "status": "tested", "trades": 8, "start_balance": 50,
+                    "return_pct": 3, "max_drawdown_mtm_pct": 4, "profit_factor": 1.2}
+        benchmark = {"symbol": "ETH", "status": "tested", "trades": 1, "start_balance": 50,
+                     "return_pct": 1, "min_quote_check_pass": True, "min_quote_notional_usd": 49}
+        row = paired_rows(strategy, benchmark, "oos_01", 100, 200, 200, "base_taker",
+                          direction_mode="SHORT")
+        self.assertEqual(row["direction_mode"], "SHORT")
+        self.assertTrue(row["paired_evaluable"])
 
     def test_low_sample_rows_count_in_unconditional_metrics_and_cash_baseline(self):
         low = paired_rows(

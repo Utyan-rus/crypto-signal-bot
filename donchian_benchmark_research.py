@@ -67,6 +67,8 @@ COST_SCENARIOS = (
     ("double_slippage", FEE, SLIPPAGE * 2),
     ("double_fee_and_slippage", FEE * 2, SLIPPAGE * 2),
 )
+# Predeclared diagnostic modes; parameters and OOS windows stay fixed.
+DIRECTION_MODES = ("BOTH", "LONG", "SHORT")
 
 
 def max_drawdown_pct(equity):
@@ -114,7 +116,8 @@ def buy_hold(symbol, candles, start, end, funding, balance, fee_rate=FEE, slippa
     }
 
 
-def paired_rows(strategy, benchmark, window, window_start, window_end, end_timestamp, cost_scenario):
+def paired_rows(strategy, benchmark, window, window_start, window_end, end_timestamp, cost_scenario,
+                direction_mode="BOTH"):
     if strategy["symbol"] != benchmark["symbol"]:
         raise ValueError("strategy and benchmark symbols differ")
     if float(strategy["start_balance"]) != float(benchmark["start_balance"]):
@@ -132,6 +135,7 @@ def paired_rows(strategy, benchmark, window, window_start, window_end, end_times
         "symbol": strategy["symbol"], "window": window, "window_start_utc": window_start,
         "window_end_utc": window_end, "shared_end_timestamp": end_timestamp,
         "start_balance": strategy["start_balance"], "cost_scenario": cost_scenario,
+        "direction_mode": direction_mode,
         "fees_per_side_pct": strategy.get("fees_per_side_pct", ""),
         "slippage_per_side_pct": strategy.get("slippage_per_side_pct", ""),
         "strategy": "donchian_20_10", "strategy_status": strategy.get("status", ""),
@@ -361,6 +365,7 @@ def main():
         "minimum_quote_notional_usd": MIN_QUOTE_NOTIONAL_USD,
         "cost_scenarios": [{"name": name, "fee_per_side": fee, "slippage_per_side": slip}
                            for name, fee, slip in COST_SCENARIOS],
+        "direction_modes": list(DIRECTION_MODES),
         "paper_only": True,
     }
     with open(os.path.join(args.out, "run_metadata.json"), "w", encoding="utf-8") as f:
@@ -382,43 +387,47 @@ def main():
             for window, window_start, window_end in windows:
                 for balance in balances:
                     for cost_scenario, fee_rate, slippage_rate in COST_SCENARIOS:
-                        strategy = simulate_with_funding(
-                            symbol, candles, "donchian_20_10", window_start, window_end, funding,
-                            start_balance=balance, fee_rate=fee_rate, slippage_rate=slippage_rate)
                         benchmark = buy_hold(
                             symbol, candles, window_start, window_end, funding, balance,
                             fee_rate=fee_rate, slippage_rate=slippage_rate)
-                        row = paired_rows(strategy, benchmark, window, window_start, window_end,
-                                          end_timestamp, cost_scenario)
-                        row["funding_coverage_pct"] = round(
-                            100 * sum(window_start <= ts < window_end for ts in funding) /
-                            max(1, (window_end-window_start)//3600), 2)
-                        rows.append(row)
+                        for direction_mode in DIRECTION_MODES:
+                            strategy = simulate_with_funding(
+                                symbol, candles, "donchian_20_10", window_start, window_end, funding,
+                                start_balance=balance, fee_rate=fee_rate, slippage_rate=slippage_rate,
+                                direction_mode=direction_mode)
+                            row = paired_rows(strategy, benchmark, window, window_start, window_end,
+                                              end_timestamp, cost_scenario, direction_mode=direction_mode)
+                            row["funding_coverage_pct"] = round(
+                                100 * sum(window_start <= ts < window_end for ts in funding) /
+                                max(1, (window_end-window_start)//3600), 2)
+                            rows.append(row)
         except Exception as exc:
             errors.append({"symbol": symbol, "error": type(exc).__name__ + ": " + str(exc)[:200]})
         time.sleep(0.15)
     write_csv(os.path.join(args.out, "donchian_benchmark_pairs.csv"), rows)
     write_csv(os.path.join(args.out, "donchian_benchmark_summary.csv"),
-              summarize(rows, ("start_balance", "cost_scenario")))
+              summarize(rows, ("start_balance", "cost_scenario", "direction_mode")))
     write_csv(os.path.join(args.out, "donchian_benchmark_by_market.csv"),
-              summarize(rows, ("symbol", "start_balance", "cost_scenario")))
+              summarize(rows, ("symbol", "start_balance", "cost_scenario", "direction_mode")))
     write_csv(os.path.join(args.out, "donchian_benchmark_by_window.csv"),
-              summarize(rows, ("window", "start_balance", "cost_scenario")))
+              summarize(rows, ("window", "start_balance", "cost_scenario", "direction_mode")))
     write_csv(os.path.join(args.out, "errors.csv"), errors, ("symbol", "error"))
     print(f"Rows={len(rows)} paired_evaluable={sum(r['paired_evaluable'] for r in rows)} "
           f"errors={len(errors)} shared_end_timestamp={end_timestamp}. Paper only.")
     for balance in balances:
         for cost_scenario, _, _ in COST_SCENARIOS:
-            data = [r for r in rows if r["paired_evaluable"] and
-                    float(r["start_balance"]) == balance and r["cost_scenario"] == cost_scenario]
-            if data:
-                excess = [float(r["excess_return_pp"]) for r in data]
-                print(f"balance={balance:g} cost={cost_scenario}: paired={len(data)} "
-                      f"mean_excess={statistics.mean(excess):+.3f}pp "
-                      f"median_excess={statistics.median(excess):+.3f}pp "
-                      f"wins={sum(r['strategy_beats_benchmark'] for r in data)}/{len(data)}")
-            else:
-                print(f"balance={balance:g} cost={cost_scenario}: no executable paired samples")
+            for direction_mode in DIRECTION_MODES:
+                data = [r for r in rows if r["paired_evaluable"] and
+                        float(r["start_balance"]) == balance and r["cost_scenario"] == cost_scenario
+                        and r["direction_mode"] == direction_mode]
+                if data:
+                    excess = [float(r["excess_return_pp"]) for r in data]
+                    print(f"balance={balance:g} cost={cost_scenario} direction={direction_mode}: paired={len(data)} "
+                          f"mean_excess={statistics.mean(excess):+.3f}pp "
+                          f"median_excess={statistics.median(excess):+.3f}pp "
+                          f"wins={sum(r['strategy_beats_benchmark'] for r in data)}/{len(data)}")
+                else:
+                    print(f"balance={balance:g} cost={cost_scenario} direction={direction_mode}: no executable paired samples")
 
 
 if __name__ == "__main__":

@@ -52,12 +52,22 @@ def make_oos_windows(end_ts, count=2, window_days=30):
 
 
 def simulate_with_funding(symbol, candles, strategy, test_start, test_end, funding,
-                           start_balance=START_BALANCE, fee_rate=None, slippage_rate=None):
+                           start_balance=START_BALANCE, fee_rate=None, slippage_rate=None,
+                           direction_mode="BOTH"):
     """Simulate one fixed OOS window; optional costs allow matched stress scenarios."""
     fee_rate = FEE if fee_rate is None else float(fee_rate)
     slippage_rate = SLIPPAGE if slippage_rate is None else float(slippage_rate)
     if fee_rate < 0 or slippage_rate < 0:
         raise ValueError("fee_rate and slippage_rate must be non-negative")
+    direction_mode = str(direction_mode).upper()
+    if direction_mode not in {"BOTH", "LONG", "SHORT"}:
+        raise ValueError("direction_mode must be BOTH, LONG, or SHORT")
+
+    def filter_signal(signal):
+        if signal is None:
+            return None
+        return signal if direction_mode == "BOTH" or signal[0] == direction_mode else None
+
     signals, exit_levels = build_model(candles, strategy)
     balance, equity, pos, trades = start_balance, [start_balance], None, []
     funding_events = 0
@@ -93,10 +103,9 @@ def simulate_with_funding(symbol, candles, strategy, test_start, test_end, fundi
                     "entry_time":pos["entry_time"],"exit_time":bar["t"],"pnl":pnl,
                     "funding_cost":pos["funding_cost"],"reason":reason})
                 pos = None
-        current_sig = signals.get(prev["t"])
-        active = bool(current_sig)
-        previous_sig = signals.get(candles[i-2]["t"]) if i >= 2 else None
-        fresh = active and (not previous_sig or previous_sig[0] != current_sig[0])
+        current_sig = filter_signal(signals.get(prev["t"]))
+        previous_sig = filter_signal(signals.get(candles[i-2]["t"]) if i >= 2 else None)
+        fresh = bool(current_sig) and (not previous_sig or previous_sig[0] != current_sig[0])
         if pos is None and test_start <= bar["t"] < test_end and fresh and balance > 0:
             side, stop_dist = current_sig
             entry = bar["o"] * (1+slippage_rate if side == "LONG" else 1-slippage_rate)
@@ -134,7 +143,10 @@ def simulate_with_funding(symbol, candles, strategy, test_start, test_end, fundi
         equity.append(balance)
     gp = sum(t["pnl"] for t in trades if t["pnl"] > 0)
     gl = -sum(t["pnl"] for t in trades if t["pnl"] < 0)
-    return {"symbol":symbol,"strategy":strategy,"trades":len(trades),
+    return {"symbol":symbol,"strategy":strategy,"direction_mode":direction_mode,
+        "trades":len(trades),
+        "long_trades":sum(t.get("side") == "LONG" for t in trades),
+        "short_trades":sum(t.get("side") == "SHORT" for t in trades),
         "start_balance":start_balance,"return_pct":round(100*(balance/start_balance-1),3),"end_balance":round(balance,6),
         "max_drawdown_mtm_pct":round(max_dd(equity),3),
         "profit_factor":round(gp/gl,3) if gl else (999.0 if gp else 0.0),
