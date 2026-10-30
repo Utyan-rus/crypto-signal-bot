@@ -5,10 +5,12 @@ on:
     paths:
       - "donchian_benchmark_research.py"
       - "paired_bootstrap_audit.py"
+      - "two_way_bootstrap_audit.py"
       - "funding_aware_research.py"
       - "hourly_candidate_research.py"
       - "tests/test_donchian_benchmark_research.py"
       - "tests/test_paired_bootstrap_audit.py"
+      - "tests/test_two_way_bootstrap_audit.py"
       - ".github/workflows/donchian-benchmark-research.yml"
   workflow_dispatch:
     inputs:
@@ -37,9 +39,10 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Compile and unit tests
         run: |
-          python -m compileall -q donchian_benchmark_research.py paired_bootstrap_audit.py funding_aware_research.py hourly_candidate_research.py
+          python -m compileall -q donchian_benchmark_research.py paired_bootstrap_audit.py two_way_bootstrap_audit.py funding_aware_research.py hourly_candidate_research.py
           python -m unittest discover -s tests -p 'test_donchian_benchmark_research.py' -v
           python -m unittest discover -s tests -p 'test_paired_bootstrap_audit.py' -v
+          python -m unittest discover -s tests -p 'test_two_way_bootstrap_audit.py' -v
       - name: Run paired 360-day OOS Donchian vs buy-and-hold on predeclared cohort
         run: |
           END_TS=$(date -u +%s)
@@ -55,6 +58,7 @@ jobs:
       - name: Quantify uncertainty with moving two-window block bootstrap
         run: |
           python paired_bootstrap_audit.py --input donchian-benchmark-results/donchian_benchmark_pairs.csv --metadata donchian-benchmark-results/run_metadata.json --out donchian-benchmark-results/paired_bootstrap_summary.csv --window-out donchian-benchmark-results/paired_bootstrap_window_detail.csv --replicates 10000 --block-length 2 --seed 20261029
+          python two_way_bootstrap_audit.py --input donchian-benchmark-results/donchian_benchmark_pairs.csv --metadata donchian-benchmark-results/run_metadata.json --out donchian-benchmark-results/paired_two_way_bootstrap_summary.csv --market-out donchian-benchmark-results/paired_leave_one_market_out.csv --replicates 10000 --block-length 2 --seed 20261030
       - uses: actions/upload-artifact@v4
         if: always()
         with:
