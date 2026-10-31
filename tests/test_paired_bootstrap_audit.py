@@ -1,6 +1,9 @@
 import unittest
 
-from paired_bootstrap_audit import audit_rows, moving_block_sample, validate_rows, write_csv\nimport csv\nimport tempfile\nimport os
+from paired_bootstrap_audit import audit_rows, moving_block_sample, validate_rows, write_csv
+import csv
+import tempfile
+import os
 import random
 
 
@@ -45,7 +48,18 @@ def fixture():
 
 
 class PairedBootstrapAuditTests(unittest.TestCase):
-    def test_write_csv_unions_fields_that_appear_in_later_rows(self):\n        rows = [{"base": 1}, {"base": 2, "late_interval": 3.5}]\n        with tempfile.TemporaryDirectory() as directory:\n            path = os.path.join(directory, "audit.csv")\n            write_csv(path, rows)\n            with open(path, newline="", encoding="utf-8") as handle:\n                saved = list(csv.DictReader(handle))\n        self.assertEqual(saved[0]["base"], "1")\n        self.assertEqual(saved[0]["late_interval"], "")\n        self.assertEqual(saved[1]["late_interval"], "3.5")\n\n    def test_moving_block_sample_is_reproducible_and_preserves_contiguous_blocks(self):
+    def test_write_csv_unions_fields_that_appear_in_later_rows(self):
+        rows = [{"base": 1}, {"base": 2, "late_interval": 3.5}]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "audit.csv")
+            write_csv(path, rows)
+            with open(path, newline="", encoding="utf-8") as handle:
+                saved = list(csv.DictReader(handle))
+        self.assertEqual(saved[0]["base"], "1")
+        self.assertEqual(saved[0]["late_interval"], "")
+        self.assertEqual(saved[1]["late_interval"], "3.5")
+
+    def test_moving_block_sample_is_reproducible_and_preserves_contiguous_blocks(self):
         names = ["a", "b", "c", "d", "e", "f"]
         a = moving_block_sample(names, 2, random.Random(7))
         b = moving_block_sample(names, 2, random.Random(7))
