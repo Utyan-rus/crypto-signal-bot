@@ -1,0 +1,48 @@
+name: ADX14 threshold Donchian paired paper research
+
+on:
+  pull_request:
+    paths:
+      - "adx_filtered_donchian_research.py"
+      - "adx_filter_bootstrap_audit.py"
+      - "tests/test_adx_filtered_donchian_research.py"
+      - "tests/test_adx_filter_bootstrap_audit.py"
+      - ".github/workflows/adx-filtered-donchian-research.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt
+      - name: Compile and regression tests
+        run: |
+          python -m compileall -q adx_filtered_donchian_research.py adx_filter_bootstrap_audit.py
+          python -m unittest discover -s tests -p 'test_adx_filtered_donchian_research.py' -v
+          python -m unittest discover -s tests -p 'test_adx_filter_bootstrap_audit.py' -v
+      - name: Run fixed 400-day funding-aware paired study
+        run: |
+          END_TS=$(date -u +%s)
+          python adx_filtered_donchian_research.py --days 400 --windows 12 --window-days 30 --max-markets 10 --balances 5,50,100 --end-timestamp "$END_TS" --out adx-filtered-donchian-results
+      - name: Quantify paired candidate-minus-baseline uncertainty
+        run: |
+          python adx_filter_bootstrap_audit.py --input adx-filtered-donchian-results/adx_filter_pairs.csv --metadata adx-filtered-donchian-results/run_metadata.json --out adx-filtered-donchian-results/adx_filter_bootstrap_summary.csv --market-out adx-filtered-donchian-results/adx_filter_leave_one_market_out.csv --window-out adx-filtered-donchian-results/adx_filter_window_detail.csv --replicates 10000 --block-length 2 --seed 20261101
+      - name: Upload research results and audit tables
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lighter-adx-filtered-donchian-research
+          path: adx-filtered-donchian-results/
+          if-no-files-found: warn
+          retention-days: 30

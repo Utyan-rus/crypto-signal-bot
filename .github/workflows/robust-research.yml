@@ -1,0 +1,47 @@
+name: Robust Lighter paper research
+
+on:
+  pull_request:
+    paths:
+      - "robust_research.py"
+      - "tests/test_robust_research.py"
+      - ".github/workflows/robust-research.yml"
+  push:
+    branches: [main]
+    paths:
+      - "robust_research.py"
+      - "tests/test_robust_research.py"
+      - ".github/workflows/robust-research.yml"
+  workflow_dispatch:
+    inputs:
+      max_markets:
+        description: "Markets to test"
+        required: true
+        default: "5"
+        type: choice
+        options: ["5", "10", "25"]
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -p 'test_robust_research.py' -v
+      - name: Run robust paper research
+        run: python robust_research.py --days 90 --max-markets "${{ inputs.max_markets || '5' }}" --out robust-research-results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lighter-robust-research
+          path: robust-research-results/
+          if-no-files-found: warn
+          retention-days: 30
