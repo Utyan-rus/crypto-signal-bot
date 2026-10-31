@@ -304,7 +304,10 @@ def write_csv(path, rows):
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     if not rows:
         raise ValueError("refusing to write an empty audit")
-    # Some diagnostic groups (for example, no-trade balances) have no bootstrap\n    # intervals, while later groups do. Build a stable union of keys across all rows.\n    fields = list(dict.fromkeys(key for row in rows for key in row))\n    with open(path, "w", newline="", encoding="utf-8") as handle:
+    # Some diagnostic groups (for example, no-trade balances) have no bootstrap
+    # intervals, while later groups do. Build a stable union of keys across all rows.
+    fields = list(dict.fromkeys(key for row in rows for key in row))
+    with open(path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
