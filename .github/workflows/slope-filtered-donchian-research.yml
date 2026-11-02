@@ -2,12 +2,20 @@ name: EMA200-slope Donchian paired paper research
 
 on:
   pull_request:
+    types: [opened, reopened]
     paths:
       - "slope_filtered_donchian_research.py"
       - "slope_filter_bootstrap_audit.py"
       - "tests/test_slope_filtered_donchian_research.py"
       - "tests/test_slope_filter_bootstrap_audit.py"
       - ".github/workflows/slope-filtered-donchian-research.yml"
+  push:
+    branches: ["research/robust-backtest-audit"]
+    paths:
+      - "slope_filtered_donchian_research.py"
+      - "slope_filter_bootstrap_audit.py"
+      - "tests/test_slope_filtered_donchian_research.py"
+      - "tests/test_slope_filter_bootstrap_audit.py"
   workflow_dispatch:
     inputs:
       max_markets:

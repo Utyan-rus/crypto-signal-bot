@@ -2,6 +2,7 @@ name: Funding-aware paper research and market constraints audit
 
 on:
   pull_request:
+    types: [opened, reopened]
     paths:
       - "funding_aware_research.py"
       - "market_constraints_audit.py"
@@ -9,6 +10,14 @@ on:
       - "tests/test_funding_aware_research.py"
       - "tests/test_ema_benchmark_research.py"
       - ".github/workflows/funding-aware-research.yml"
+  push:
+    branches: ["research/robust-backtest-audit"]
+    paths:
+      - "funding_aware_research.py"
+      - "market_constraints_audit.py"
+      - "ema_benchmark_research.py"
+      - "tests/test_funding_aware_research.py"
+      - "tests/test_ema_benchmark_research.py"
   workflow_dispatch:
     inputs:
       max_markets:

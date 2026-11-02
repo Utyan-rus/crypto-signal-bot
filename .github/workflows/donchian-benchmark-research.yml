@@ -2,6 +2,7 @@ name: Paired Donchian benchmark research
 
 on:
   pull_request:
+    types: [opened, reopened]
     paths:
       - "donchian_benchmark_research.py"
       - "paired_bootstrap_audit.py"
@@ -12,6 +13,18 @@ on:
       - "tests/test_paired_bootstrap_audit.py"
       - "tests/test_two_way_bootstrap_audit.py"
       - ".github/workflows/donchian-benchmark-research.yml"
+  push:
+    branches: ["research/robust-backtest-audit"]
+    paths:
+      - "donchian_benchmark_research.py"
+      - "paired_bootstrap_audit.py"
+      - "two_way_bootstrap_audit.py"
+      - "funding_aware_research.py"
+      - "hourly_candidate_research.py"
+      - "tests/test_donchian_benchmark_research.py"
+      - "tests/test_paired_bootstrap_audit.py"
+      - "tests/test_two_way_bootstrap_audit.py"
+      - "tests/test_hourly_candidate_research.py"
   workflow_dispatch:
     inputs:
       cohort:

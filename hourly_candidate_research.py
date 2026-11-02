@@ -17,7 +17,7 @@ SLIPPAGE = 0.0005
 START_BALANCE = 5.0
 RISK_FRACTION = 0.005
 MAX_LEVERAGE = 3.0
-MIN_NOTIONAL = 1.0
+MIN_NOTIONAL = 10.0
 
 
 def ema(values, period):
@@ -139,6 +139,7 @@ def simulate(symbol, candles, strategy, test_start, test_end):
     peak = balance
     pos = None
     trades = []
+    min_notional_rejections = 0
     last_signal_side = None
     last_signal_active = False
     for i in range(1, len(candles)):
@@ -180,6 +181,8 @@ def simulate(symbol, candles, strategy, test_start, test_end):
             entry = bar["o"] * (1+SLIPPAGE if side == "LONG" else 1-SLIPPAGE)
             # Do not inflate risk to meet the exchange minimum notional.
             qty = size_position(balance, entry, stop_dist)
+            if qty <= 0:
+                min_notional_rejections += 1
             if qty > 0:
                 stop = entry-stop_dist if side == "LONG" else entry+stop_dist
                 pos = {"side":side,"entry":entry,"qty":qty,"stop":stop,
@@ -220,6 +223,8 @@ def simulate(symbol, candles, strategy, test_start, test_end):
             "profit_factor":round(gp/gl,3) if gl else (999.0 if gp else 0.0),
             "long_trades":sum(t["side"]=="LONG" for t in trades),
             "short_trades":sum(t["side"]=="SHORT" for t in trades),
+            "min_notional_rejections":min_notional_rejections,
+            "min_notional_assumption_usd":MIN_NOTIONAL,
             "fees_per_side_pct":FEE*100,"slippage_per_side_pct":SLIPPAGE*100,
             "status":"tested" if len(trades)>=5 else "low_sample"}
 

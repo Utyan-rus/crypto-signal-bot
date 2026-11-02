@@ -1,6 +1,7 @@
 import unittest
+from unittest.mock import patch
 
-from hourly_candidate_research import build_model, max_dd, simulate, size_position
+from hourly_candidate_research import MIN_NOTIONAL, build_model, max_dd, simulate, size_position
 
 
 class HourlyCandidateResearchTests(unittest.TestCase):
@@ -22,12 +23,27 @@ class HourlyCandidateResearchTests(unittest.TestCase):
         self.assertTrue(all(t < self.candles[-1]["t"] for t in signals))
 
     def test_minimum_notional_never_forces_excess_risk(self):
-        # With $5 capital and a wide stop, the risk-sized order is below $1.
+        self.assertEqual(MIN_NOTIONAL, 10.0)
+        # A wide stop sizes below the venue's $10 minimum and must be rejected.
         self.assertEqual(size_position(5.0, 100.0, 10.0), 0.0)
-        # A feasible order stays within the defined risk budget.
+        # A feasible $15 notional order remains inside both leverage and risk caps.
         qty = size_position(5.0, 100.0, 0.1)
         self.assertGreater(qty, 0.0)
+        self.assertGreaterEqual(qty * 100.0, MIN_NOTIONAL)
+        self.assertLessEqual(qty * 100.0, 5.0 * 3.0 + 1e-12)
         self.assertLessEqual(qty * 0.1, 5.0 * 0.005 + 1e-12)
+
+    def test_simulation_counts_minimum_notional_rejections(self):
+        candles = [
+            {"t":i*3600, "o":100.0, "h":100.2, "l":99.8, "c":100.0, "v":100.0}
+            for i in range(4)
+        ]
+        with patch("hourly_candidate_research.build_model",
+                   return_value=({0:("LONG", 10.0)}, {})):
+            result = simulate("TEST", candles, "donchian_20_10", 3600, 4*3600)
+        self.assertEqual(result["trades"], 0)
+        self.assertEqual(result["min_notional_rejections"], 1)
+        self.assertEqual(result["min_notional_assumption_usd"], 10.0)
 
     def test_drawdown_is_mark_to_market(self):
         self.assertAlmostEqual(max_dd([5.0, 4.0, 4.5, 5.5]), 20.0)

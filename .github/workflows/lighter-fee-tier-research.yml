@@ -2,10 +2,16 @@ name: Lighter fee-tier sensitivity paper research
 
 on:
   pull_request:
+    types: [opened, reopened]
     paths:
       - "lighter_fee_tier_research.py"
       - "tests/test_lighter_fee_tier_research.py"
       - ".github/workflows/lighter-fee-tier-research.yml"
+  push:
+    branches: ["research/robust-backtest-audit"]
+    paths:
+      - "lighter_fee_tier_research.py"
+      - "tests/test_lighter_fee_tier_research.py"
   workflow_dispatch:
 
 permissions:

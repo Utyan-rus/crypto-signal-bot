@@ -2,11 +2,18 @@ name: Hourly candidate research
 
 on:
   pull_request:
+    types: [opened, reopened]
     paths:
       - "backtest.py"
       - "hourly_candidate_research.py"
       - "tests/test_hourly_candidate_research.py"
       - ".github/workflows/hourly-candidate-research.yml"
+  push:
+    branches: ["research/robust-backtest-audit"]
+    paths:
+      - "backtest.py"
+      - "hourly_candidate_research.py"
+      - "tests/test_hourly_candidate_research.py"
   workflow_dispatch:
     inputs:
       max_markets:

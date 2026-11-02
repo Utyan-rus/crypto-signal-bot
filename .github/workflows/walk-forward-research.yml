@@ -2,11 +2,19 @@ name: 365-day fixed-parameter hourly walk-forward research
 
 on:
   pull_request:
+    types: [opened, reopened]
     paths:
       - "walk_forward_research.py"
       - "hourly_candidate_research.py"
       - "tests/test_walk_forward_research.py"
       - ".github/workflows/walk-forward-research.yml"
+  push:
+    branches: ["research/robust-backtest-audit"]
+    paths:
+      - "walk_forward_research.py"
+      - "hourly_candidate_research.py"
+      - "tests/test_walk_forward_research.py"
+      - "tests/test_hourly_candidate_research.py"
   workflow_dispatch:
     inputs:
       max_markets:
@@ -14,7 +22,7 @@ on:
         required: true
         default: "5"
         type: choice
-        options: ["5", "10", "25"]
+        options: ["5", "10"]
 
 permissions:
   contents: read

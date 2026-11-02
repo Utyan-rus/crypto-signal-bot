@@ -2,12 +2,20 @@ name: ADX14 threshold Donchian paired paper research
 
 on:
   pull_request:
+    types: [opened, reopened]
     paths:
       - "adx_filtered_donchian_research.py"
       - "adx_filter_bootstrap_audit.py"
       - "tests/test_adx_filtered_donchian_research.py"
       - "tests/test_adx_filter_bootstrap_audit.py"
       - ".github/workflows/adx-filtered-donchian-research.yml"
+  push:
+    branches: ["research/robust-backtest-audit"]
+    paths:
+      - "adx_filtered_donchian_research.py"
+      - "adx_filter_bootstrap_audit.py"
+      - "tests/test_adx_filtered_donchian_research.py"
+      - "tests/test_adx_filter_bootstrap_audit.py"
   workflow_dispatch:
 
 permissions:
