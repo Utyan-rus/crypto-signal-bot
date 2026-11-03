@@ -1,8 +1,8 @@
 """Fixed-parameter walk-forward audit of hourly Lighter strategy candidates.
 
-Paper-only: public candles, no order placement. Uses causal indicators from full
-chronological history and eight non-overlapping 30-day OOS windows. Funding is
-explicitly excluded because verified historical funding series are not integrated.
+Paper-only: public candles and settled funding, no order placement. Uses causal
+indicators and eight non-overlapping 30-day OOS windows. Funding coverage is gated
+before any performance metrics or bootstrap intervals are computed.
 """
 import argparse
 import csv
@@ -12,6 +12,7 @@ import statistics
 import time
 
 import hourly_candidate_research as hourly
+import funding_aware_research as funding_research
 from backtest import fetch_candles, get_markets
 from two_way_bootstrap_audit import leave_one_market_out, metrics as paired_metrics, two_way_bootstrap
 
@@ -28,6 +29,7 @@ COSTS = (
 BOOTSTRAP_REPLICATES = 10000
 BOOTSTRAP_BLOCK_LENGTH = 2
 BOOTSTRAP_SEED = 20261103
+MIN_FUNDING_COVERAGE_PCT = 99.0
 
 
 def make_windows(end_ts, days=WINDOW_DAYS, count=OOS_WINDOWS):
@@ -41,28 +43,131 @@ def make_windows(end_ts, days=WINDOW_DAYS, count=OOS_WINDOWS):
 
 
 def buy_hold_baseline(candles, window_start, window_end, start_balance,
-                      fee_rate, slippage_rate, min_notional):
-    """Costed 1x long buy-and-hold; never bypass the minimum quote notional."""
+                      fee_rate, slippage_rate, min_notional, funding=None):
+    """Costed 1x long perp baseline with the same signed historical funding."""
+    funding = funding or {}
     if start_balance < min_notional or start_balance <= 0:
         return {"executable": False, "status": "not_executable_below_min_notional",
-                "return_pct": None}
+                "return_pct": None, "funding_net_cost_usd": 0.0,
+                "funding_events_charged": 0}
     bars = [bar for bar in candles if window_start <= bar["t"] < window_end]
     if len(bars) < 2:
         return {"executable": False, "status": "insufficient_window_data",
-                "return_pct": None}
+                "return_pct": None, "funding_net_cost_usd": 0.0,
+                "funding_events_charged": 0}
+    entry_time = int(bars[0]["t"])
     entry = bars[0]["o"] * (1 + slippage_rate)
     if entry <= 0:
-        return {"executable": False, "status": "invalid_entry_price", "return_pct": None}
+        return {"executable": False, "status": "invalid_entry_price",
+                "return_pct": None, "funding_net_cost_usd": 0.0,
+                "funding_events_charged": 0}
     qty = start_balance / entry
     if qty * entry < min_notional:
         return {"executable": False, "status": "not_executable_below_min_notional",
-                "return_pct": None}
+                "return_pct": None, "funding_net_cost_usd": 0.0,
+                "funding_events_charged": 0}
+    close_by_time = {int(bar["t"]): float(bar["c"]) for bar in bars}
+    funding_cost = 0.0
+    funding_events = 0
+    for timestamp, rate in sorted(funding.items()):
+        timestamp = int(timestamp)
+        if entry_time < timestamp < window_end:
+            mark = close_by_time.get(timestamp)
+            if mark is None:
+                raise ValueError(f"funding timestamp {timestamp} has no matching hourly candle")
+            # Positive signed rate means longs pay; negative means longs receive.
+            funding_cost += qty * mark * float(rate)
+            funding_events += 1
     exit_price = bars[-1]["c"] * (1 - slippage_rate)
     gross = qty * (exit_price - entry)
     fees = abs(qty * entry) * fee_rate + abs(qty * exit_price) * fee_rate
-    pnl = gross - fees
-    return {"executable": True, "status": "executable_1x_long_no_funding",
-            "return_pct": round(100 * pnl / start_balance, 6)}
+    pnl = gross - fees - funding_cost
+    return {"executable": True, "status": "executable_1x_long_with_funding",
+            "return_pct": round(100 * pnl / start_balance, 6),
+            "funding_net_cost_usd": round(funding_cost, 8),
+            "funding_events_charged": funding_events}
+
+
+def funding_coverage(funding, window_start, window_end):
+    """Measure exact hourly timestamp coverage; missing rows are never treated as zero."""
+    first_expected = ((int(window_start) + 3599) // 3600) * 3600
+    expected = set(range(first_expected, int(window_end), 3600))
+    observed = {
+        int(timestamp) for timestamp in funding
+        if int(window_start) <= int(timestamp) < int(window_end)
+    }
+    covered = observed & expected
+    missing = expected - covered
+    unexpected = observed - expected
+    expected_count = len(expected)
+    return {
+        "funding_rows": len(covered),
+        "expected_funding_hours": expected_count,
+        "funding_coverage_pct": round(100 * len(covered) / expected_count, 3) if expected_count else 0.0,
+        "missing_funding_hours": len(missing),
+        "unexpected_funding_rows": len(unexpected),
+    }
+
+
+def funding_coverage_is_acceptable(coverage):
+    """Fail closed on material missing or misaligned hourly funding rows."""
+    return (
+        coverage.get("funding_coverage_pct", 0) >= MIN_FUNDING_COVERAGE_PCT
+        and coverage.get("unexpected_funding_rows", 0) == 0
+    )
+
+
+def capital_feasibility_audit(balance, risk_fraction, minimum_stop_fraction,
+                              max_leverage, min_notional):
+    """Upper-bound the risk-sized notional under the simulator's minimum stop distance."""
+    if (balance <= 0 or risk_fraction <= 0 or minimum_stop_fraction <= 0
+            or max_leverage <= 0 or min_notional <= 0):
+        raise ValueError("capital feasibility inputs must be positive")
+    risk_notional = balance * risk_fraction / minimum_stop_fraction
+    leverage_notional = balance * max_leverage
+    maximum_allowed = min(risk_notional, leverage_notional)
+    minimum_balance = max(
+        min_notional * minimum_stop_fraction / risk_fraction,
+        min_notional / max_leverage,
+    )
+    return {
+        "balance_usd": round(balance, 6),
+        "maximum_risk_sized_notional_usd": round(risk_notional, 6),
+        "maximum_leverage_notional_usd": round(leverage_notional, 6),
+        "maximum_allowed_notional_usd": round(maximum_allowed, 6),
+        "minimum_quote_notional_assumption_usd": round(min_notional, 6),
+        "minimum_balance_usd_at_minimum_stop": round(minimum_balance, 6),
+        "minimum_notional_reachable_at_minimum_stop": maximum_allowed >= min_notional,
+        "upper_bound_only": True,
+    }
+
+
+def simulate_funding_audited(symbol, candles, strategy, test_start, test_end,
+                             funding, start_balance, fee_rate, slippage_rate):
+    """Run the funding-aware simulator and count every signal rejected by risk/min-notional sizing."""
+    rejected_sizing_attempts = 0
+    original_size_position = funding_research.size_position
+
+    def tracked_size_position(balance, entry, stop_dist):
+        nonlocal rejected_sizing_attempts
+        quantity = original_size_position(balance, entry, stop_dist)
+        if quantity <= 0 and balance > 0 and entry > 0 and stop_dist > 0:
+            rejected_sizing_attempts += 1
+        return quantity
+
+    funding_research.size_position = tracked_size_position
+    try:
+        row = funding_research.simulate_with_funding(
+            symbol, candles, strategy, test_start, test_end, funding,
+            start_balance=start_balance, fee_rate=fee_rate,
+            slippage_rate=slippage_rate, direction_mode="BOTH"
+        )
+    finally:
+        funding_research.size_position = original_size_position
+    row["min_notional_rejections"] = (
+        int(row.get("min_notional_rejections", 0) or 0) + rejected_sizing_attempts
+    )
+    return row
 
 
 def summarize(rows):
@@ -90,6 +195,10 @@ def summarize(rows):
                   and r.get("excess_vs_buy_hold_pp") not in ("", None)]
         excess = [float(r["excess_vs_buy_hold_pp"]) for r in paired]
         benchmark_wins = [bool(r.get("strategy_beats_benchmark_observed")) for r in paired]
+        funding_coverages = [float(r.get("funding_coverage_pct", 0) or 0) for r in subset]
+        strategy_funding_costs = [float(r.get("funding_net_cost_usd", 0) or 0) for r in subset]
+        benchmark_funding_costs = [float(r.get("buy_hold_funding_net_cost_usd", 0) or 0) for r in subset]
+        funding_events = [int(r.get("funding_events_charged", 0) or 0) for r in subset]
         out.append({
             "strategy": strategy,
             "cost_scenario": cost,
@@ -116,7 +225,11 @@ def summarize(rows):
             "pf_eligible_windows": len(pf),
             "mean_profit_factor": round(statistics.mean(pf), 3) if pf else "",
             "min_notional_rejections": sum(int(r.get("min_notional_rejections", 0) or 0) for r in subset),
-            "historical_funding_coverage_pct": 0.0,
+            "historical_funding_coverage_pct": round(statistics.mean(funding_coverages), 3) if funding_coverages else 0.0,
+            "minimum_funding_coverage_pct": round(min(funding_coverages), 3) if funding_coverages else 0.0,
+            "total_strategy_funding_net_cost_usd": round(sum(strategy_funding_costs), 8),
+            "total_buy_hold_funding_net_cost_usd": round(sum(benchmark_funding_costs), 8),
+            "total_strategy_funding_events": sum(funding_events),
         })
     return out
 
@@ -195,7 +308,7 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
     windows = make_windows(end_ts)
     markets = select_research_markets(get_markets(), max_markets)
     metadata = {
-        "experiment": "fixed_parameter_hourly_walk_forward_min_notional_corrected",
+        "experiment": "fixed_parameter_hourly_walk_forward_funding_aware_min_notional_corrected",
         "selection_rule": "predeclared ordered crypto-major cohort; no OOS-based market selection",
         "requested_symbols": list(RESEARCH_SYMBOLS[:max_markets]),
         "markets_tested": [market["symbol"] for market in markets],
@@ -206,21 +319,32 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
         "shared_end_timestamp": end_ts,
         "history_start_timestamp": start_ts,
         "start_balance": start_balance,
-        "balance_role": "diagnostic strategy-capital scenario; the user's $5 feasibility gate is audited separately",
+        "balance_role": "selected diagnostic strategy-capital scenario; independent 5 USD feasibility upper bound is reported below",
+        "five_usd_capital_feasibility": capital_feasibility_audit(
+            5.0, hourly.RISK_FRACTION, 0.003, hourly.MAX_LEVERAGE, hourly.MIN_NOTIONAL
+        ),
+        "selected_balance_capital_feasibility": capital_feasibility_audit(
+            start_balance, hourly.RISK_FRACTION, 0.003, hourly.MAX_LEVERAGE, hourly.MIN_NOTIONAL
+        ),
         "minimum_quote_notional_usd": hourly.MIN_NOTIONAL,
+        "minimum_quote_notional_source": "simulator assumption; not independently verified for every market in this run",
         "risk_fraction": hourly.RISK_FRACTION,
         "max_leverage": hourly.MAX_LEVERAGE,
         "cost_scenarios": [
             {"name": name, "fee_per_side": fee, "slippage_per_side": slip}
             for name, fee, slip in COSTS
         ],
-        "funding": "excluded: verified historical funding series is not integrated",
-        "historical_funding_coverage_pct": 0.0,
+        "funding": "included: signed hourly historical funding applied to open positions and 1x long benchmark",
+        "funding_source": "Lighter public /api/v1/fundings?resolution=1h",
+        "funding_sign_convention": "positive rate with direction=long means longs pay; direction=short means shorts pay",
+        "funding_coverage_threshold_pct": MIN_FUNDING_COVERAGE_PCT,
+        "funding_coverage_rule": "at least 99% of expected hourly settlement timestamps and zero unexpected timestamps in every market and OOS window; otherwise fail closed",
+        "historical_funding_coverage_pct": "reported per market and OOS window in funding_coverage.csv",
         "cash_baseline_return_pct": 0.0,
         "buy_hold_baseline": (
             "not_executable_below_min_notional"
             if start_balance < hourly.MIN_NOTIONAL
-            else "1x long buy-and-hold; same per-side fees/slippage; funding excluded"
+            else "1x long perpetual buy-and-hold; same per-side fees/slippage and signed historical funding"
         ),
         "bootstrap": {
             "replicates": BOOTSTRAP_REPLICATES,
@@ -232,77 +356,142 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
     }
     with open(os.path.join(output_dir, "walk_forward_metadata.json"), "w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2)
-    results, failures = [], []
-    original_fee, original_slippage, original_balance = hourly.FEE, hourly.SLIPPAGE, hourly.START_BALANCE
-    try:
-        hourly.START_BALANCE = start_balance
-        for n, market in enumerate(markets, 1):
-            symbol = market["symbol"]
-            print(f"[{n}/{len(markets)}] {symbol}")
-            try:
-                candles = fetch_candles(market["id"], "1h", start_ts, end_ts)
-                if len(candles) < days * 24 * 0.8:
-                    results.append({"symbol": symbol, "strategy": "ALL",
-                                    "status": "incomplete_history", "bars_1h": len(candles)})
-                    continue
-                # Build causal indicators once; each trade is still gated to a distinct OOS window.
-                for strategy in STRATEGIES:
-                    for window_name, window_start, window_end in windows:
-                        for cost_name, fee, slip in COSTS:
-                            hourly.FEE, hourly.SLIPPAGE = fee, slip
-                            row = hourly.simulate(symbol, candles, strategy, window_start, window_end)
-                            benchmark = buy_hold_baseline(
-                                candles, window_start, window_end, start_balance,
-                                fee, slip, hourly.MIN_NOTIONAL
-                            )
-                            excess = (
-                                row["return_pct"] - benchmark["return_pct"]
-                                if benchmark["executable"] else None
-                            )
-                            row.update({
-                                "window": window_name,
-                                "window_start_utc": window_start,
-                                "window_end_utc": window_end,
-                                "window_days": WINDOW_DAYS,
-                                "context_days": days,
-                                "cost_scenario": cost_name,
-                                "direction_mode": "BOTH",
-                                "fees_per_side_pct": fee * 100,
-                                "slippage_per_side_pct": slip * 100,
-                                "funding": "excluded: verified historical funding not integrated",
-                                "historical_funding_coverage_pct": 0.0,
-                                "cash_return_pct": 0.0,
-                                "cash_baseline_return_pct": 0.0,
-                                "excess_vs_cash_pp": row["return_pct"],
-                                "buy_hold_executable": benchmark["executable"],
-                                "buy_hold_status": benchmark["status"],
-                                "buy_hold_return_pct": benchmark["return_pct"],
-                                "buy_hold_min_quote_notional_usd": hourly.MIN_NOTIONAL,
-                                "buy_hold_method": "1x long; fees/slippage on entry and exit; funding excluded",
-                                "excess_vs_buy_hold_pp": excess,
-                                "paired_evaluable": benchmark["executable"],
-                                "strategy_return_pct": row["return_pct"],
-                                "strategy_mtm_drawdown_pct": row["max_drawdown_mtm_pct"],
-                                "strategy_status": row["status"],
-                                "strategy_trades": row["trades"],
-                                "strategy_profit_factor": row["profit_factor"],
-                                "benchmark_executable": benchmark["executable"],
-                                "benchmark_return_pct": benchmark["return_pct"],
-                                "observed_excess_return_vs_benchmark_pp": excess,
-                                "strategy_beats_benchmark_observed": bool(excess is not None and excess > 0),
-                                "fixed_parameters": True,
-                                "status": row["status"],
-                            })
-                            results.append(row)
-                            print(f"  {strategy}/{window_name}/{cost_name}: "
-                                  f"{row['return_pct']:+.2f}%, DD {row['max_drawdown_mtm_pct']:.2f}%, "
-                                  f"PF {row['profit_factor']}, n={row['trades']}")
-                time.sleep(0.2)
-            except Exception as exc:
-                failures.append({"symbol": symbol, "error": type(exc).__name__ + ": " + str(exc)[:200]})
-                print(f"FAILED {symbol}: {type(exc).__name__}: {str(exc)[:200]}")
-    finally:
-        hourly.FEE, hourly.SLIPPAGE, hourly.START_BALANCE = original_fee, original_slippage, original_balance
+    results, failures, coverage_rows = [], [], []
+    market_data = []
+    for n, market in enumerate(markets, 1):
+        symbol = market["symbol"]
+        print(f"[{n}/{len(markets)}] prefetching candles and funding for {symbol}")
+        try:
+            candles = fetch_candles(market["id"], "1h", start_ts, end_ts)
+            if len(candles) < days * 24 * 0.8:
+                raise RuntimeError(f"incomplete hourly candle history: {len(candles)} bars")
+            funding = funding_research.fetch_funding_rates(market["id"], start_ts, end_ts)
+            per_window_coverage = {}
+            for window_name, window_start, window_end in windows:
+                coverage = funding_coverage(funding, window_start, window_end)
+                per_window_coverage[window_name] = coverage
+                coverage_rows.append({
+                    "symbol": symbol,
+                    "window": window_name,
+                    "window_start_utc": window_start,
+                    "window_end_utc": window_end,
+                    **coverage,
+                })
+                if not funding_coverage_is_acceptable(coverage):
+                    failures.append({
+                        "symbol": symbol,
+                        "window": window_name,
+                        "error": (
+                            f"funding coverage={coverage['funding_coverage_pct']:.3f}% "
+                            f"(required >= {MIN_FUNDING_COVERAGE_PCT:.1f}%, "
+                            f"unexpected timestamps={coverage['unexpected_funding_rows']})"
+                        ),
+                    })
+            market_data.append({
+                "market": market,
+                "candles": candles,
+                "funding": funding,
+                "coverage": per_window_coverage,
+            })
+        except Exception as exc:
+            failures.append({
+                "symbol": symbol,
+                "error": type(exc).__name__ + ": " + str(exc)[:240],
+            })
+            print(f"  PREFETCH FAILED: {type(exc).__name__}: {str(exc)[:240]}")
+        time.sleep(0.2)
+
+    with open(os.path.join(output_dir, "funding_coverage.csv"), "w", newline="", encoding="utf-8") as f:
+        fields = ["symbol", "window", "window_start_utc", "window_end_utc",
+                  "funding_rows", "expected_funding_hours", "funding_coverage_pct",
+                  "missing_funding_hours", "unexpected_funding_rows"]
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(coverage_rows)
+    with open(os.path.join(output_dir, "failures.json"), "w", encoding="utf-8") as f:
+        json.dump(failures, f, ensure_ascii=False, indent=2)
+
+    if failures or len(market_data) != len(markets):
+        raise RuntimeError(
+            "Funding/candle coverage gate failed; performance metrics and bootstrap were not computed. "
+            f"See funding_coverage.csv and failures.json ({len(failures)} issues)."
+        )
+
+    for n, item in enumerate(market_data, 1):
+        market = item["market"]
+        symbol = market["symbol"]
+        candles = item["candles"]
+        funding = item["funding"]
+        print(f"[{n}/{len(market_data)}] simulating {symbol}")
+        for strategy in STRATEGIES:
+            for window_name, window_start, window_end in windows:
+                coverage = item["coverage"][window_name]
+                for cost_name, fee, slip in COSTS:
+                    row = simulate_funding_audited(
+                        symbol, candles, strategy, window_start, window_end,
+                        funding, start_balance, fee, slip
+                    )
+                    benchmark = buy_hold_baseline(
+                        candles, window_start, window_end, start_balance,
+                        fee, slip, hourly.MIN_NOTIONAL, funding=funding
+                    )
+                    excess = (
+                        row["return_pct"] - benchmark["return_pct"]
+                        if benchmark["executable"] else None
+                    )
+                    row.update({
+                        "window": window_name,
+                        "window_start_utc": window_start,
+                        "window_end_utc": window_end,
+                        "window_days": WINDOW_DAYS,
+                        "context_days": days,
+                        "cost_scenario": cost_name,
+                        "direction_mode": "BOTH",
+                        "fees_per_side_pct": fee * 100,
+                        "slippage_per_side_pct": slip * 100,
+                        "funding": "included: signed hourly settlement history",
+                        "funding_source": "Lighter public /api/v1/fundings resolution=1h",
+                        "funding_sign_convention": "positive long-direction rate: long pays; short receives",
+                        "funding_coverage_pct": coverage["funding_coverage_pct"],
+                        "historical_funding_coverage_pct": coverage["funding_coverage_pct"],
+                        "funding_rows_in_window": coverage["funding_rows"],
+                        "expected_funding_hours": coverage["expected_funding_hours"],
+                        "funding_missing_hours": coverage["missing_funding_hours"],
+                        "funding_unexpected_rows": coverage["unexpected_funding_rows"],
+                        "cash_return_pct": 0.0,
+                        "cash_baseline_return_pct": 0.0,
+                        "excess_vs_cash_pp": row["return_pct"],
+                        "buy_hold_executable": benchmark["executable"],
+                        "buy_hold_status": benchmark["status"],
+                        "buy_hold_return_pct": benchmark["return_pct"],
+                        "buy_hold_min_quote_notional_usd": hourly.MIN_NOTIONAL,
+                        "buy_hold_method": "1x long perpetual; same fees/slippage and signed historical funding",
+                        "buy_hold_funding_net_cost_usd": benchmark["funding_net_cost_usd"],
+                        "buy_hold_funding_events_charged": benchmark["funding_events_charged"],
+                        "excess_vs_buy_hold_pp": excess,
+                        "paired_evaluable": bool(
+                            benchmark["executable"]
+                            and funding_coverage_is_acceptable(coverage)
+                        ),
+                        "strategy_return_pct": row["return_pct"],
+                        "strategy_mtm_drawdown_pct": row["max_drawdown_mtm_pct"],
+                        "strategy_status": row["status"],
+                        "strategy_trades": row["trades"],
+                        "strategy_profit_factor": row["profit_factor"],
+                        "benchmark_executable": benchmark["executable"],
+                        "benchmark_return_pct": benchmark["return_pct"],
+                        "observed_excess_return_vs_benchmark_pp": excess,
+                        "strategy_beats_benchmark_observed": bool(excess is not None and excess > 0),
+                        "fixed_parameters": True,
+                    })
+                    results.append(row)
+                    print(
+                        f"  {strategy}/{window_name}/{cost_name}: "
+                        f"{row['return_pct']:+.2f}%, funding {row['funding_net_cost_usd']:+.5f} USD, "
+                        f"coverage {coverage['funding_coverage_pct']:.2f}%, "
+                        f"DD {row['max_drawdown_mtm_pct']:.2f}%, PF {row['profit_factor']}, "
+                        f"trades {row['trades']}"
+                    )
 
     if results:
         with open(os.path.join(output_dir, "walk_forward_detail.csv"), "w", newline="", encoding="utf-8") as f:
@@ -320,7 +509,9 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
                   "buy_hold_mean_return_pct", "mean_excess_vs_buy_hold_pp",
                   "strategy_win_fraction_vs_buy_hold_pct", "mean_mtm_drawdown_pct", "total_trades",
                   "pf_eligible_windows", "mean_profit_factor", "min_notional_rejections",
-                  "historical_funding_coverage_pct"]
+                  "historical_funding_coverage_pct", "minimum_funding_coverage_pct",
+                  "total_strategy_funding_net_cost_usd", "total_buy_hold_funding_net_cost_usd",
+                  "total_strategy_funding_events"]
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         writer.writerows(summary)
@@ -377,9 +568,9 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
                   f"{row.get('two_way_mean_excess_vs_benchmark_pp_ci95_high')}]")
         else:
             print(f"  {row['strategy']}/{row['cost_scenario']}: CI not computed ({row['error']})")
-    incomplete = sum(row.get("status") == "incomplete_history" for row in results)
-    print(f"Leave-one-market-out rows={len(lomo_rows)}; incomplete markets={incomplete}; "
-          f"funding coverage=0.00%; Rows={len(results)}, API failures={len(failures)}. Paper-only.")
+    minimum_coverage = min((row["funding_coverage_pct"] for row in coverage_rows), default=0.0)
+    print(f"Leave-one-market-out rows={len(lomo_rows)}; minimum funding coverage={minimum_coverage:.3f}%; "
+          f"Rows={len(results)}, API/coverage failures={len(failures)}. Paper-only.")
     return results, summary, failures
 
 

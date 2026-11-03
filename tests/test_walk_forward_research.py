@@ -1,6 +1,9 @@
 import unittest
+from unittest.mock import patch
 
-from walk_forward_research import (COSTS, RESEARCH_SYMBOLS, bootstrap_summaries, buy_hold_baseline, make_windows, select_research_markets, summarize)
+import funding_aware_research as funding_research
+import hourly_candidate_research as hourly
+from walk_forward_research import (COSTS, MIN_FUNDING_COVERAGE_PCT, RESEARCH_SYMBOLS, bootstrap_summaries, buy_hold_baseline, capital_feasibility_audit, funding_coverage, funding_coverage_is_acceptable, make_windows, select_research_markets, simulate_funding_audited, summarize)
 
 
 class WalkForwardResearchTests(unittest.TestCase):
@@ -77,6 +80,82 @@ class WalkForwardResearchTests(unittest.TestCase):
         self.assertAlmostEqual(large["return_pct"], 20.0)
         costed = buy_hold_baseline(candles, 0, 3, 50.0, 0.0005, 0.0005, 10.0)
         self.assertLess(costed["return_pct"], large["return_pct"])
+
+
+    def test_buy_hold_baseline_applies_signed_funding(self):
+        candles = [
+            {"t": 0, "o": 100.0, "c": 100.0},
+            {"t": 3600, "o": 100.0, "c": 100.0},
+            {"t": 7200, "o": 100.0, "c": 100.0},
+        ]
+        result = buy_hold_baseline(
+            candles, 0, 10800, 50.0, 0.0, 0.0, 10.0,
+            funding={3600: 0.01, 7200: -0.005}
+        )
+        self.assertTrue(result["executable"])
+        self.assertEqual(result["funding_events_charged"], 2)
+        self.assertAlmostEqual(result["funding_net_cost_usd"], 0.25)
+        self.assertAlmostEqual(result["return_pct"], -0.5)
+
+    def test_funding_coverage_counts_exact_hourly_rows_and_reports_gaps(self):
+        full = funding_coverage({0: 0.0, 3600: 0.001, 7200: -0.001}, 0, 10800)
+        partial = funding_coverage({0: 0.0, 3600: 0.001}, 0, 10800)
+        self.assertEqual(full["funding_rows"], 3)
+        self.assertEqual(full["expected_funding_hours"], 3)
+        self.assertEqual(full["funding_coverage_pct"], 100.0)
+        self.assertEqual(partial["missing_funding_hours"], 1)
+        self.assertAlmostEqual(partial["funding_coverage_pct"], 200 / 3, places=2)
+        self.assertEqual(MIN_FUNDING_COVERAGE_PCT, 99.0)
+        self.assertTrue(funding_coverage_is_acceptable(full))
+        self.assertFalse(funding_coverage_is_acceptable(partial))
+        misaligned = funding_coverage({0: 0.0, 3600: 0.001, 7200: -0.001, 1800: 0.0001}, 0, 10800)
+        self.assertFalse(funding_coverage_is_acceptable(misaligned))
+
+    def test_funding_aware_simulator_matches_no_funding_hourly_baseline(self):
+        candles = [
+            {"t": 0, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 100.0},
+            {"t": 3600, "o": 100.0, "h": 101.0, "l": 99.0, "c": 101.0, "v": 100.0},
+            {"t": 7200, "o": 101.0, "h": 102.0, "l": 100.0, "c": 101.5, "v": 100.0},
+        ]
+        signals = {0: ("LONG", 2.0)}
+        with patch.object(hourly, "build_model", return_value=(signals, {})), \
+             patch.object(funding_research, "build_model", return_value=(signals, {})):
+            original_balance = hourly.START_BALANCE
+            hourly.START_BALANCE = 50.0
+            try:
+                baseline = hourly.simulate("TEST", candles, "stub", 0, 10800)
+                funded = simulate_funding_audited(
+                    "TEST", candles, "stub", 0, 10800, {}, 50.0,
+                    hourly.FEE, hourly.SLIPPAGE
+                )
+            finally:
+                hourly.START_BALANCE = original_balance
+        self.assertEqual(funded["trades"], baseline["trades"])
+        self.assertAlmostEqual(funded["return_pct"], baseline["return_pct"], places=3)
+        self.assertAlmostEqual(funded["max_drawdown_mtm_pct"], baseline["max_drawdown_mtm_pct"], places=3)
+
+    def test_five_usd_balance_cannot_meet_min_notional_without_breaking_risk_cap(self):
+        audit = capital_feasibility_audit(5.0, 0.005, 0.003, 3.0, 10.0)
+        self.assertAlmostEqual(audit["maximum_risk_sized_notional_usd"], 8.333333, places=5)
+        self.assertEqual(audit["maximum_leverage_notional_usd"], 15.0)
+        self.assertFalse(audit["minimum_notional_reachable_at_minimum_stop"])
+        self.assertEqual(audit["minimum_balance_usd_at_minimum_stop"], 6.0)
+        self.assertTrue(audit["upper_bound_only"])
+        larger = capital_feasibility_audit(50.0, 0.005, 0.003, 3.0, 10.0)
+        self.assertTrue(larger["minimum_notional_reachable_at_minimum_stop"])
+
+    def test_funding_aware_simulator_counts_zero_sized_min_notional_rejections(self):
+        candles = [
+            {"t": 0, "o": 100.0, "h": 100.5, "l": 99.5, "c": 100.0, "v": 100.0},
+            {"t": 3600, "o": 100.0, "h": 100.5, "l": 99.5, "c": 100.0, "v": 100.0},
+            {"t": 7200, "o": 100.0, "h": 100.5, "l": 99.5, "c": 100.0, "v": 100.0},
+        ]
+        with patch.object(funding_research, "build_model", return_value=({0: ("LONG", 2.0)}, {})):
+            result = simulate_funding_audited(
+                "TEST", candles, "stub", 0, 10800, {}, 5.0, 0.0, 0.0
+            )
+        self.assertEqual(result["trades"], 0)
+        self.assertEqual(result["min_notional_rejections"], 1)
 
     def test_two_way_bootstrap_is_reproducible_and_rejects_incomplete_grid(self):
         symbols = ["BTC", "ETH"]
