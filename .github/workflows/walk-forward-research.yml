@@ -17,10 +17,16 @@ on:
       - "tests/test_hourly_candidate_research.py"
   workflow_dispatch:
     inputs:
+      start_balance:
+        description: "Diagnostic starting balance in USD (paper only)"
+        required: true
+        default: "50"
+        type: choice
+        options: ["5", "50", "100"]
       max_markets:
         description: "Markets to test"
         required: true
-        default: "5"
+        default: "10"
         type: choice
         options: ["5", "10"]
 
@@ -41,7 +47,7 @@ jobs:
       - name: Run unit tests
         run: python -m unittest discover -s tests -p 'test_walk_forward_research.py' -v
       - name: Run 365-day history with eight OOS windows
-        run: python walk_forward_research.py --days 365 --max-markets "${{ inputs.max_markets || '5' }}" --out walk-forward-results
+        run: python walk_forward_research.py --days 365 --max-markets "${{ inputs.max_markets || '10' }}" --start-balance "${{ inputs.start_balance || '50' }}" --out walk-forward-results
       - uses: actions/upload-artifact@v4
         if: always()
         with:
