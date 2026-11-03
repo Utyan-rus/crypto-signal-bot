@@ -2,7 +2,8 @@
 
 This is an independent research harness. It does not place orders or alter runtime strategy.
 Signals are calculated once on the full chronological candle series; test entries are gated
-to the holdout interval. Fees/slippage are stress-tested. Funding remains a disclosed limitation.
+to the holdout interval. Fees/slippage and a $10 minimum-notional gate are enforced.
+Historical funding remains unavailable.
 """
 import argparse
 import csv
@@ -19,6 +20,11 @@ COST_SCENARIOS = (
     ("double_cost", 0.0010, 0.0010),
     ("triple_cost", 0.0015, 0.0015),
 )
+
+# Match the $10 minimum-notional assumption used by hourly_candidate_research.py.
+# strategy_research.MIN_NOTIONAL is a legacy $1 value; do not inherit it here.
+# Never increase quantity or risk to force an order through the minimum.
+MIN_NOTIONAL = 10.0
 
 
 def max_drawdown(equity_path):
@@ -39,6 +45,8 @@ def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fr
     last_exit = -10**9
     trades = []
     equity_path = [balance]
+    entry_attempts = 0
+    min_notional_rejections = 0
     for i in range(1, len(candles)):
         prev, bar = candles[i - 1], candles[i]
         if bar["t"] < holdout_start:
@@ -89,12 +97,13 @@ def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fr
         fresh_now = bool(sig and (not prevprev or prevprev[0] != sig[0]))
         if (pos is None and not closed and i-last_exit > cooldown and sig
                 and balance > 0 and (not fresh or fresh_now)):
+            entry_attempts += 1
             side, stop_distance, rr = sig
             entry = bar["o"] * (1 + slippage_rate if side == "LONG" else 1 - slippage_rate)
             qty = min(balance * base.RISK_FRACTION /
                       (stop_distance + entry * 2 * (fee_rate + slippage_rate)),
                       balance * base.LEVERAGE / entry)
-            if qty > 0 and qty * entry >= base.MIN_NOTIONAL:
+            if qty > 0 and qty * entry >= MIN_NOTIONAL:
                 stop = entry - stop_distance if side == "LONG" else entry + stop_distance
                 target = entry + stop_distance * rr if side == "LONG" else entry - stop_distance * rr
                 pos = {"side": side, "entry": entry, "qty": qty, "stop": stop,
@@ -116,6 +125,8 @@ def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fr
                                    "pnl": pnl, "reason": reason})
                     pos = None
                     last_exit = i
+            elif qty > 0:
+                min_notional_rejections += 1
 
         # Mark-to-market equity includes unrealized PnL and entry fee while position is open.
         equity = balance
@@ -149,8 +160,17 @@ def simulate_oos(symbol, candles, signals, holdout_start, strategy, cooldown, fr
         "max_drawdown_mtm_pct": round(max_drawdown(equity_path), 3),
         "funding_stress_rate_per_8h_pct": round(funding_rate_8h * 100, 4),
         "profit_factor": round(gross_profit / gross_loss, 3) if gross_loss else (999.0 if gross_profit else None),
+        "entry_attempts": entry_attempts,
+        "min_notional_rejections": min_notional_rejections,
+        "min_notional_assumption_usd": MIN_NOTIONAL,
+        "cash_baseline_return_pct": 0.0,
+        "buy_hold_status": ("not_executable_at_1x_below_min_notional"
+                            if base.START_BALANCE < MIN_NOTIONAL else "not_computed"),
+        "buy_hold_return_pct": None,
+        "historical_funding_coverage_pct": 0.0,
         "funding": "excluded; historical funding series not integrated",
-        "status": "tested" if len(trades) >= 5 else "low_sample",
+        "status": ("tested" if len(trades) >= 5 else
+                   "not_executable" if not trades and min_notional_rejections else "low_sample"),
     }
 
 
@@ -243,12 +263,21 @@ def main():
     with open(os.path.join(args.out, "failures.json"), "w", encoding="utf-8") as f:
         json.dump(failures, f, ensure_ascii=False, indent=2)
     tested = [r for r in results if r.get("trades", 0) >= 5]
-    print(f"Rows={len(results)}, tested={len(tested)}, API failures={len(failures)}")
+    not_executable = sum(r.get("status") == "not_executable" for r in results)
+    rejected = sum(r.get("min_notional_rejections", 0) for r in results)
+    print(f"Rows={len(results)}, tested={len(tested)}, not_executable_rows={not_executable}, "
+          f"min_notional_rejections_across_scenarios={rejected}, API failures={len(failures)}")
+    if base.START_BALANCE < MIN_NOTIONAL:
+        print(f"Baseline audit: cash/no-trade=0.00%; 1x buy-and-hold not executable "
+              f"(${base.START_BALANCE:.2f} < ${MIN_NOTIONAL:.2f} minimum notional).")
+    print("Historical funding coverage: 0.00%; synthetic funding rows are adverse stress only.")
     print("Directional fixed-RR/base-cost/no-funding summary:")
     for row in sorted(summary, key=lambda x: x["mean_return_pct"], reverse=True):
         print(f"  {row['strategy']}/{row['direction_mode']}: mean {row['mean_return_pct']:+.2f}%, "
               f"positive markets {row['positive_markets']}/{row['markets_tested']}, "
               f"DD {row['mean_mtm_drawdown_pct']:.2f}%, trades {row['total_trades']}")
+    if not summary:
+        print("  No executable direction rows met the minimum sample threshold.")
     print("Paper-only. Mark-to-market drawdown; full-history indicators; funding is synthetic stress, not historical data.")
 if __name__ == "__main__":
     main()
