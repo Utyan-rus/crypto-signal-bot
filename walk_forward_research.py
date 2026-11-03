@@ -32,6 +32,11 @@ BOOTSTRAP_SEED = 20261103
 MIN_FUNDING_COVERAGE_PCT = 99.0
 
 
+def floor_to_hour(timestamp):
+    """Use the last fully closed hourly boundary; never include the live partial candle."""
+    return (int(timestamp) // 3600) * 3600
+
+
 def make_windows(end_ts, days=WINDOW_DAYS, count=OOS_WINDOWS):
     """Return chronological, non-overlapping OOS windows ending at end_ts."""
     seconds = days * 86400
@@ -303,7 +308,8 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
     if start_balance <= 0:
         raise ValueError("start_balance must be positive")
     os.makedirs(output_dir, exist_ok=True)
-    end_ts = int(end_ts or time.time())
+    requested_end_ts = int(end_ts or time.time())
+    end_ts = floor_to_hour(requested_end_ts)
     start_ts = end_ts - days * 86400
     windows = make_windows(end_ts)
     markets = select_research_markets(get_markets(), max_markets)
@@ -316,8 +322,10 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
         "warmup_days_available": days - OOS_WINDOWS * WINDOW_DAYS,
         "oos_window_count": len(windows),
         "oos_window_days": WINDOW_DAYS,
+        "requested_end_timestamp": requested_end_ts,
         "shared_end_timestamp": end_ts,
         "history_start_timestamp": start_ts,
+        "end_timestamp_rule": "floored to the last fully closed UTC hourly boundary",
         "start_balance": start_balance,
         "balance_role": "selected diagnostic strategy-capital scenario; independent 5 USD feasibility upper bound is reported below",
         "five_usd_capital_feasibility": capital_feasibility_audit(
@@ -337,6 +345,7 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
         "funding": "included: signed hourly historical funding applied to open positions and 1x long benchmark",
         "funding_source": "Lighter public /api/v1/fundings?resolution=1h",
         "funding_sign_convention": "positive rate with direction=long means longs pay; direction=short means shorts pay",
+        "funding_mark_price_assumption": "funding is applied at its matching hourly candle timestamp using that candle close, mirroring the existing funding-aware simulator; exact settlement-mark alignment remains an assumption",
         "funding_coverage_threshold_pct": MIN_FUNDING_COVERAGE_PCT,
         "funding_coverage_rule": "at least 99% of expected hourly settlement timestamps and zero unexpected timestamps in every market and OOS window; otherwise fail closed",
         "historical_funding_coverage_pct": "reported per market and OOS window in funding_coverage.csv",

@@ -3,10 +3,14 @@ from unittest.mock import patch
 
 import funding_aware_research as funding_research
 import hourly_candidate_research as hourly
-from walk_forward_research import (COSTS, MIN_FUNDING_COVERAGE_PCT, RESEARCH_SYMBOLS, bootstrap_summaries, buy_hold_baseline, capital_feasibility_audit, funding_coverage, funding_coverage_is_acceptable, make_windows, select_research_markets, simulate_funding_audited, summarize)
+from walk_forward_research import (COSTS, MIN_FUNDING_COVERAGE_PCT, RESEARCH_SYMBOLS, bootstrap_summaries, buy_hold_baseline, capital_feasibility_audit, funding_coverage, funding_coverage_is_acceptable, floor_to_hour, make_windows, select_research_markets, simulate_funding_audited, summarize)
 
 
 class WalkForwardResearchTests(unittest.TestCase):
+    def test_end_timestamp_uses_last_fully_closed_hour(self):
+        self.assertEqual(floor_to_hour(1793692773), 1793689200)
+        self.assertEqual(floor_to_hour(1793689200), 1793689200)
+
     def test_windows_are_chronological_non_overlapping_and_cover_240_days(self):
         end = 2_000_000_000
         windows = make_windows(end)
