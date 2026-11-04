@@ -17,6 +17,7 @@ from backtest import fetch_candles, get_markets
 from two_way_bootstrap_audit import leave_one_market_out, metrics as paired_metrics, two_way_bootstrap
 
 STRATEGIES = ("donchian_20_10", "ema_20_50_cross", "ema_trend_pullback")
+DIRECTION_MODES = ("BOTH", "LONG", "SHORT")
 WINDOW_DAYS = 30
 OOS_WINDOWS = 8
 CONTEXT_DAYS = 365
@@ -148,7 +149,8 @@ def capital_feasibility_audit(balance, risk_fraction, minimum_stop_fraction,
 
 
 def simulate_funding_audited(symbol, candles, strategy, test_start, test_end,
-                             funding, start_balance, fee_rate, slippage_rate):
+                             funding, start_balance, fee_rate, slippage_rate,
+                             direction_mode="BOTH"):
     """Run the funding-aware simulator and count every signal rejected by risk/min-notional sizing."""
     rejected_sizing_attempts = 0
     original_size_position = funding_research.size_position
@@ -165,7 +167,7 @@ def simulate_funding_audited(symbol, candles, strategy, test_start, test_end,
         row = funding_research.simulate_with_funding(
             symbol, candles, strategy, test_start, test_end, funding,
             start_balance=start_balance, fee_rate=fee_rate,
-            slippage_rate=slippage_rate, direction_mode="BOTH"
+            slippage_rate=slippage_rate, direction_mode=direction_mode
         )
     finally:
         funding_research.size_position = original_size_position
@@ -176,13 +178,16 @@ def simulate_funding_audited(symbol, candles, strategy, test_start, test_end,
 
 
 def summarize(rows):
-    """Summarize all market-windows, retaining cash rows and paired buy-and-hold excess."""
+    """Summarize each predeclared direction separately across market-windows."""
     out = []
-    keys = sorted({(r["strategy"], r["cost_scenario"]) for r in rows
-                   if r.get("cost_scenario") is not None})
-    for strategy, cost in keys:
+    keys = sorted({
+        (r["strategy"], r["cost_scenario"], str(r.get("direction_mode", "BOTH")).upper())
+        for r in rows if r.get("cost_scenario") is not None
+    })
+    for strategy, cost, direction in keys:
         subset = [r for r in rows if r["strategy"] == strategy
-                  and r["cost_scenario"] == cost]
+                  and r["cost_scenario"] == cost
+                  and str(r.get("direction_mode", "BOTH")).upper() == direction]
         if not subset:
             continue
         returns = [float(r["return_pct"]) for r in subset]
@@ -207,6 +212,7 @@ def summarize(rows):
         out.append({
             "strategy": strategy,
             "cost_scenario": cost,
+            "direction_mode": direction,
             "observations": len(subset),
             "tested_market_windows": len(tested),
             "low_sample_market_windows": len(subset) - len(tested),
@@ -241,13 +247,17 @@ def summarize(rows):
 
 def bootstrap_summaries(rows, windows, symbols, replicates=BOOTSTRAP_REPLICATES,
                         block_length=BOOTSTRAP_BLOCK_LENGTH, seed=BOOTSTRAP_SEED):
-    """Two-way market resampling plus contiguous OOS-window blocks for each fixed strategy/cost."""
+    """Two-way market/time bootstrap for each fixed strategy/cost/direction group."""
     output = []
-    keys = sorted({(r["strategy"], r["cost_scenario"]) for r in rows
-                   if r.get("strategy") in STRATEGIES and r.get("cost_scenario") is not None})
-    for index, (strategy, cost) in enumerate(keys):
+    keys = sorted({
+        (r["strategy"], r["cost_scenario"], str(r.get("direction_mode", "BOTH")).upper())
+        for r in rows
+        if r.get("strategy") in STRATEGIES and r.get("cost_scenario") is not None
+    })
+    for index, (strategy, cost, direction) in enumerate(keys):
         group = [r for r in rows if r.get("strategy") == strategy
-                 and r.get("cost_scenario") == cost]
+                 and r.get("cost_scenario") == cost
+                 and str(r.get("direction_mode", "BOTH")).upper() == direction]
         point = paired_metrics(group)
         run_seed = seed + index
         try:
@@ -261,6 +271,7 @@ def bootstrap_summaries(rows, windows, symbols, replicates=BOOTSTRAP_REPLICATES,
         output.append({
             "strategy": strategy,
             "cost_scenario": cost,
+            "direction_mode": direction,
             "status": status,
             "error": error,
             "markets": len(symbols),
@@ -314,8 +325,10 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
     windows = make_windows(end_ts)
     markets = select_research_markets(get_markets(), max_markets)
     metadata = {
-        "experiment": "fixed_parameter_hourly_walk_forward_funding_aware_min_notional_corrected",
+        "experiment": "fixed_parameter_hourly_walk_forward_funding_aware_direction_decomposition",
         "selection_rule": "predeclared ordered crypto-major cohort; no OOS-based market selection",
+        "direction_modes": list(DIRECTION_MODES),
+        "direction_mode_role": "predeclared BOTH/LONG/SHORT decomposition; exploratory diagnosis only, not OOS-based side selection",
         "requested_symbols": list(RESEARCH_SYMBOLS[:max_markets]),
         "markets_tested": [market["symbol"] for market in markets],
         "days_of_history_requested": days,
@@ -359,6 +372,7 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
             "replicates": BOOTSTRAP_REPLICATES,
             "block_length_windows": BOOTSTRAP_BLOCK_LENGTH,
             "seed": BOOTSTRAP_SEED,
+            "seed_rule": "base seed plus sorted strategy/cost/direction group index",
             "method": "two_way_market_resampling_plus_contiguous_window_blocks",
         },
         "paper_only": True,
@@ -433,74 +447,75 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
         funding = item["funding"]
         print(f"[{n}/{len(market_data)}] simulating {symbol}")
         for strategy in STRATEGIES:
-            for window_name, window_start, window_end in windows:
-                coverage = item["coverage"][window_name]
-                for cost_name, fee, slip in COSTS:
-                    row = simulate_funding_audited(
-                        symbol, candles, strategy, window_start, window_end,
-                        funding, start_balance, fee, slip
-                    )
-                    benchmark = buy_hold_baseline(
-                        candles, window_start, window_end, start_balance,
-                        fee, slip, hourly.MIN_NOTIONAL, funding=funding
-                    )
-                    excess = (
-                        row["return_pct"] - benchmark["return_pct"]
-                        if benchmark["executable"] else None
-                    )
-                    row.update({
-                        "window": window_name,
-                        "window_start_utc": window_start,
-                        "window_end_utc": window_end,
-                        "window_days": WINDOW_DAYS,
-                        "context_days": days,
-                        "cost_scenario": cost_name,
-                        "direction_mode": "BOTH",
-                        "fees_per_side_pct": fee * 100,
-                        "slippage_per_side_pct": slip * 100,
-                        "funding": "included: signed hourly settlement history",
-                        "funding_source": "Lighter public /api/v1/fundings resolution=1h",
-                        "funding_sign_convention": "positive long-direction rate: long pays; short receives",
-                        "funding_coverage_pct": coverage["funding_coverage_pct"],
-                        "historical_funding_coverage_pct": coverage["funding_coverage_pct"],
-                        "funding_rows_in_window": coverage["funding_rows"],
-                        "expected_funding_hours": coverage["expected_funding_hours"],
-                        "funding_missing_hours": coverage["missing_funding_hours"],
-                        "funding_unexpected_rows": coverage["unexpected_funding_rows"],
-                        "cash_return_pct": 0.0,
-                        "cash_baseline_return_pct": 0.0,
-                        "excess_vs_cash_pp": row["return_pct"],
-                        "buy_hold_executable": benchmark["executable"],
-                        "buy_hold_status": benchmark["status"],
-                        "buy_hold_return_pct": benchmark["return_pct"],
-                        "buy_hold_min_quote_notional_usd": hourly.MIN_NOTIONAL,
-                        "buy_hold_method": "1x long perpetual; same fees/slippage and signed historical funding",
-                        "buy_hold_funding_net_cost_usd": benchmark["funding_net_cost_usd"],
-                        "buy_hold_funding_events_charged": benchmark["funding_events_charged"],
-                        "excess_vs_buy_hold_pp": excess,
-                        "paired_evaluable": bool(
-                            benchmark["executable"]
-                            and funding_coverage_is_acceptable(coverage)
-                        ),
-                        "strategy_return_pct": row["return_pct"],
-                        "strategy_mtm_drawdown_pct": row["max_drawdown_mtm_pct"],
-                        "strategy_status": row["status"],
-                        "strategy_trades": row["trades"],
-                        "strategy_profit_factor": row["profit_factor"],
-                        "benchmark_executable": benchmark["executable"],
-                        "benchmark_return_pct": benchmark["return_pct"],
-                        "observed_excess_return_vs_benchmark_pp": excess,
-                        "strategy_beats_benchmark_observed": bool(excess is not None and excess > 0),
-                        "fixed_parameters": True,
-                    })
-                    results.append(row)
-                    print(
-                        f"  {strategy}/{window_name}/{cost_name}: "
-                        f"{row['return_pct']:+.2f}%, funding {row['funding_net_cost_usd']:+.5f} USD, "
-                        f"coverage {coverage['funding_coverage_pct']:.2f}%, "
-                        f"DD {row['max_drawdown_mtm_pct']:.2f}%, PF {row['profit_factor']}, "
-                        f"trades {row['trades']}"
-                    )
+            for direction_mode in DIRECTION_MODES:
+                for window_name, window_start, window_end in windows:
+                    coverage = item["coverage"][window_name]
+                    for cost_name, fee, slip in COSTS:
+                        row = simulate_funding_audited(
+                            symbol, candles, strategy, window_start, window_end,
+                            funding, start_balance, fee, slip, direction_mode
+                        )
+                        benchmark = buy_hold_baseline(
+                            candles, window_start, window_end, start_balance,
+                            fee, slip, hourly.MIN_NOTIONAL, funding=funding
+                        )
+                        excess = (
+                            row["return_pct"] - benchmark["return_pct"]
+                            if benchmark["executable"] else None
+                        )
+                        row.update({
+                            "window": window_name,
+                            "window_start_utc": window_start,
+                            "window_end_utc": window_end,
+                            "window_days": WINDOW_DAYS,
+                            "context_days": days,
+                            "cost_scenario": cost_name,
+                            "direction_mode": direction_mode,
+                            "fees_per_side_pct": fee * 100,
+                            "slippage_per_side_pct": slip * 100,
+                            "funding": "included: signed hourly settlement history",
+                            "funding_source": "Lighter public /api/v1/fundings resolution=1h",
+                            "funding_sign_convention": "positive long-direction rate: long pays; short receives",
+                            "funding_coverage_pct": coverage["funding_coverage_pct"],
+                            "historical_funding_coverage_pct": coverage["funding_coverage_pct"],
+                            "funding_rows_in_window": coverage["funding_rows"],
+                            "expected_funding_hours": coverage["expected_funding_hours"],
+                            "funding_missing_hours": coverage["missing_funding_hours"],
+                            "funding_unexpected_rows": coverage["unexpected_funding_rows"],
+                            "cash_return_pct": 0.0,
+                            "cash_baseline_return_pct": 0.0,
+                            "excess_vs_cash_pp": row["return_pct"],
+                            "buy_hold_executable": benchmark["executable"],
+                            "buy_hold_status": benchmark["status"],
+                            "buy_hold_return_pct": benchmark["return_pct"],
+                            "buy_hold_min_quote_notional_usd": hourly.MIN_NOTIONAL,
+                            "buy_hold_method": "1x long perpetual; same fees/slippage and signed historical funding",
+                            "buy_hold_funding_net_cost_usd": benchmark["funding_net_cost_usd"],
+                            "buy_hold_funding_events_charged": benchmark["funding_events_charged"],
+                            "excess_vs_buy_hold_pp": excess,
+                            "paired_evaluable": bool(
+                                benchmark["executable"]
+                                and funding_coverage_is_acceptable(coverage)
+                            ),
+                            "strategy_return_pct": row["return_pct"],
+                            "strategy_mtm_drawdown_pct": row["max_drawdown_mtm_pct"],
+                            "strategy_status": row["status"],
+                            "strategy_trades": row["trades"],
+                            "strategy_profit_factor": row["profit_factor"],
+                            "benchmark_executable": benchmark["executable"],
+                            "benchmark_return_pct": benchmark["return_pct"],
+                            "observed_excess_return_vs_benchmark_pp": excess,
+                            "strategy_beats_benchmark_observed": bool(excess is not None and excess > 0),
+                            "fixed_parameters": True,
+                        })
+                        results.append(row)
+                        print(
+                            f"  {strategy}/{direction_mode}/{window_name}/{cost_name}: "
+                            f"{row['return_pct']:+.2f}%, funding {row['funding_net_cost_usd']:+.5f} USD, "
+                            f"coverage {coverage['funding_coverage_pct']:.2f}%, "
+                            f"DD {row['max_drawdown_mtm_pct']:.2f}%, PF {row['profit_factor']}, "
+                            f"trades {row['trades']}"
+                        )
 
     if results:
         with open(os.path.join(output_dir, "walk_forward_detail.csv"), "w", newline="", encoding="utf-8") as f:
@@ -510,7 +525,7 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
             writer.writerows(results)
     summary = summarize(results)
     with open(os.path.join(output_dir, "walk_forward_summary.csv"), "w", newline="", encoding="utf-8") as f:
-        fields = ["strategy", "cost_scenario", "observations", "tested_market_windows",
+        fields = ["strategy", "cost_scenario", "direction_mode", "observations", "tested_market_windows",
                   "low_sample_market_windows", "active_market_windows", "no_trade_market_windows",
                   "mean_return_pct", "median_return_pct", "tested_only_mean_return_pct",
                   "positive_market_windows", "positive_fraction_pct", "cash_baseline_return_pct",
@@ -542,7 +557,7 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
             continue
         strategy_lomo = leave_one_market_out(
             strategy_rows, [start_balance], [cost[0] for cost in COSTS],
-            ["BOTH"], window_names, symbols
+            list(DIRECTION_MODES), window_names, symbols
         )
         for item in strategy_lomo:
             expected = (len(symbols) if item["omitted_symbol"] == "NONE"
@@ -560,7 +575,7 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
         json.dump(failures, f, ensure_ascii=False, indent=2)
     print("WALK-FORWARD SUMMARY (equal-weight independent market-window tests):")
     for row in sorted(summary, key=lambda r: (r["cost_scenario"], -r["mean_return_pct"])):
-        print(f"  {row['strategy']}/{row['cost_scenario']}: mean {row['mean_return_pct']:+.2f}%, "
+        print(f"  {row['strategy']}/{row['direction_mode']}/{row['cost_scenario']}: mean {row['mean_return_pct']:+.2f}%, "
               f"positive {row['positive_market_windows']}/{row['observations']}, "
               f"active {row['active_market_windows']}, no-trade {row['no_trade_market_windows']}, "
               f"min-notional rejects {row['min_notional_rejections']}, "
@@ -570,7 +585,7 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
     print("TWO-WAY BOOTSTRAP (10,000 replicates; 2-window contiguous blocks):")
     for row in bootstrap_summary:
         if row["status"] == "ok":
-            print(f"  {row['strategy']}/{row['cost_scenario']}: "
+            print(f"  {row['strategy']}/{row['direction_mode']}/{row['cost_scenario']}: "
                   f"mean CI95=[{row.get('two_way_mean_return_pct_ci95_low')},"
                   f"{row.get('two_way_mean_return_pct_ci95_high')}], "
                   f"excess-vs-buy-hold CI95=[{row.get('two_way_mean_excess_vs_benchmark_pp_ci95_low')},"

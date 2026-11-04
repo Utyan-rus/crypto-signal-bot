@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import funding_aware_research as funding_research
 import hourly_candidate_research as hourly
-from walk_forward_research import (COSTS, MIN_FUNDING_COVERAGE_PCT, RESEARCH_SYMBOLS, bootstrap_summaries, buy_hold_baseline, capital_feasibility_audit, funding_coverage, funding_coverage_is_acceptable, floor_to_hour, make_windows, select_research_markets, simulate_funding_audited, summarize)
+from walk_forward_research import (COSTS, DIRECTION_MODES, MIN_FUNDING_COVERAGE_PCT, RESEARCH_SYMBOLS, bootstrap_summaries, buy_hold_baseline, capital_feasibility_audit, funding_coverage, funding_coverage_is_acceptable, floor_to_hour, make_windows, select_research_markets, simulate_funding_audited, summarize)
 
 
 class WalkForwardResearchTests(unittest.TestCase):
@@ -204,6 +204,76 @@ class WalkForwardResearchTests(unittest.TestCase):
                          ["BTC", "ETH", "SOL", "BNB", "XRP"])
         with self.assertRaises(RuntimeError):
             select_research_markets(markets[:-1], 5)
+
+
+    def test_direction_modes_are_predeclared_and_ordered(self):
+        self.assertEqual(DIRECTION_MODES, ("BOTH", "LONG", "SHORT"))
+
+    def test_simulate_funding_audited_passes_direction_mode(self):
+        fake_result = {
+            "symbol": "TEST", "strategy": "stub", "trades": 0,
+            "return_pct": 0.0, "max_drawdown_mtm_pct": 0.0,
+            "profit_factor": 0.0, "min_notional_rejections": 0,
+        }
+        with patch.object(funding_research, "simulate_with_funding",
+                          return_value=fake_result) as simulator:
+            result = simulate_funding_audited(
+                "TEST", [], "stub", 0, 3600, {}, 50.0, 0.0, 0.0,
+                direction_mode="SHORT"
+            )
+        self.assertEqual(simulator.call_args.kwargs["direction_mode"], "SHORT")
+        self.assertEqual(result["trades"], 0)
+
+    def test_summary_keeps_long_and_short_direction_rows_separate(self):
+        common = {
+            "strategy": "s", "cost_scenario": "base", "status": "tested",
+            "symbol": "BTC", "window": "oos_1", "max_drawdown_mtm_pct": 2,
+            "trades": 10, "profit_factor": 1.2, "min_notional_rejections": 0,
+            "buy_hold_executable": True, "buy_hold_return_pct": 0.5,
+            "paired_evaluable": True,
+        }
+        rows = [
+            {**common, "direction_mode": "LONG", "return_pct": 1.0,
+             "excess_vs_buy_hold_pp": 0.5, "strategy_beats_benchmark_observed": True},
+            {**common, "direction_mode": "SHORT", "return_pct": -1.0,
+             "excess_vs_buy_hold_pp": -1.5, "strategy_beats_benchmark_observed": False},
+        ]
+        result = summarize(rows)
+        by_direction = {row["direction_mode"]: row for row in result}
+        self.assertEqual(set(by_direction), {"LONG", "SHORT"})
+        self.assertEqual(by_direction["LONG"]["mean_return_pct"], 1.0)
+        self.assertEqual(by_direction["SHORT"]["mean_return_pct"], -1.0)
+
+    def test_bootstrap_summaries_keep_direction_grids_separate(self):
+        symbols = ["BTC", "ETH"]
+        windows = ["w1", "w2", "w3", "w4"]
+        rows = []
+        for direction in ("LONG", "SHORT"):
+            for symbol_index, symbol in enumerate(symbols):
+                for window_index, window in enumerate(windows):
+                    strategy_return = (1.0 if direction == "LONG" else -1.0) + 0.1 * (window_index % 2)
+                    benchmark_return = 0.25
+                    rows.append({
+                        "strategy": "donchian_20_10", "cost_scenario": "base",
+                        "symbol": symbol, "window": window, "start_balance": 50.0,
+                        "direction_mode": direction, "strategy_return_pct": strategy_return,
+                        "strategy_mtm_drawdown_pct": 2.0, "strategy_status": "tested",
+                        "strategy_trades": 10, "strategy_profit_factor": 1.2,
+                        "benchmark_executable": True, "benchmark_return_pct": benchmark_return,
+                        "paired_evaluable": True,
+                        "observed_excess_return_vs_benchmark_pp": strategy_return - benchmark_return,
+                        "strategy_beats_benchmark_observed": strategy_return > benchmark_return,
+                    })
+        result = bootstrap_summaries(rows, windows, symbols, replicates=100,
+                                     block_length=2, seed=123)
+        by_direction = {row["direction_mode"]: row for row in result}
+        self.assertEqual(set(by_direction), {"LONG", "SHORT"})
+        self.assertEqual(by_direction["LONG"]["market_window_rows"], 8)
+        self.assertEqual(by_direction["SHORT"]["market_window_rows"], 8)
+        self.assertGreater(by_direction["LONG"]["mean_return_pct"],
+                           by_direction["SHORT"]["mean_return_pct"])
+        self.assertEqual(by_direction["LONG"]["status"], "ok")
+        self.assertEqual(by_direction["SHORT"]["status"], "ok")
 
 
 if __name__ == "__main__":
