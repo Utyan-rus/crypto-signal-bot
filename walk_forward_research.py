@@ -733,11 +733,6 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
                   "total_strategy_funding_net_cost_usd", "total_buy_hold_funding_net_cost_usd",
                   "total_directional_benchmark_funding_net_cost_usd", "total_buy_hold_funding_events",
                   "total_directional_benchmark_funding_events", "total_strategy_funding_events"]
-                  "pf_eligible_windows", "mean_profit_factor", "min_notional_rejections",
-                  "historical_funding_coverage_pct", "minimum_funding_coverage_pct",
-                  "total_strategy_funding_net_cost_usd", "total_buy_hold_funding_net_cost_usd",
-                  "total_directional_benchmark_funding_net_cost_usd", "total_buy_hold_funding_events",
-                  "total_directional_benchmark_funding_events", "total_strategy_funding_events"]
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         writer.writerows(summary)
