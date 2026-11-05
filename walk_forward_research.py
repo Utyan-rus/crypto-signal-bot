@@ -21,6 +21,7 @@ DIRECTION_MODES = ("BOTH", "LONG", "SHORT")
 WINDOW_DAYS = 30
 OOS_WINDOWS = 8
 CONTEXT_DAYS = 365
+MIN_WARMUP_DAYS = 125
 COSTS = (
     ("zero_fee_base_slippage", 0.0, 0.0005),
     ("assumed_taker_base_slippage", 0.0005, 0.0005),
@@ -40,12 +41,28 @@ def floor_to_hour(timestamp):
 
 def make_windows(end_ts, days=WINDOW_DAYS, count=OOS_WINDOWS):
     """Return chronological, non-overlapping OOS windows ending at end_ts."""
+    if count < 1:
+        raise ValueError("count must be >= 1")
     seconds = days * 86400
     first = end_ts - count * seconds
     return [
         (f"oos_{i + 1}", first + i * seconds, first + (i + 1) * seconds)
         for i in range(count)
     ]
+
+
+def validate_window_geometry(total_days, oos_windows):
+    """Require the fixed 125-day pre-OOS warmup plus every requested OOS window."""
+    if oos_windows < 1:
+        raise ValueError("oos_windows must be >= 1")
+    warmup_days = int(total_days) - int(oos_windows) * WINDOW_DAYS
+    if warmup_days < MIN_WARMUP_DAYS:
+        required = MIN_WARMUP_DAYS + int(oos_windows) * WINDOW_DAYS
+        raise ValueError(
+            f"Need at least {MIN_WARMUP_DAYS} warmup days plus "
+            f"{oos_windows} OOS windows of {WINDOW_DAYS} days ({required} total days)"
+        )
+    return warmup_days
 
 
 def buy_hold_baseline(candles, window_start, window_end, start_balance,
@@ -470,16 +487,16 @@ def select_research_markets(markets, max_markets=5):
     return [by_symbol[symbol] for symbol in selected_symbols]
 
 def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
-                 output_dir="walk-forward-results", start_balance=5.0):
-    if days < CONTEXT_DAYS:
-        raise ValueError(f"Need at least {CONTEXT_DAYS} days for EMA warmup and OOS windows")
+                 output_dir="walk-forward-results", start_balance=5.0,
+                 oos_windows=OOS_WINDOWS):
+    warmup_days_available = validate_window_geometry(days, oos_windows)
     if start_balance <= 0:
         raise ValueError("start_balance must be positive")
     os.makedirs(output_dir, exist_ok=True)
     requested_end_ts = int(end_ts or time.time())
     end_ts = floor_to_hour(requested_end_ts)
     start_ts = end_ts - days * 86400
-    windows = make_windows(end_ts)
+    windows = make_windows(end_ts, count=oos_windows)
     markets = select_research_markets(get_markets(), max_markets)
     metadata = {
         "experiment": "fixed_parameter_hourly_walk_forward_funding_aware_direction_decomposition",
@@ -489,7 +506,8 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
         "requested_symbols": list(RESEARCH_SYMBOLS[:max_markets]),
         "markets_tested": [market["symbol"] for market in markets],
         "days_of_history_requested": days,
-        "warmup_days_available": days - OOS_WINDOWS * WINDOW_DAYS,
+        "warmup_days_required": MIN_WARMUP_DAYS,
+        "warmup_days_available": warmup_days_available,
         "oos_window_count": len(windows),
         "oos_window_days": WINDOW_DAYS,
         "requested_end_timestamp": requested_end_ts,
@@ -808,12 +826,13 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--days", type=int, default=CONTEXT_DAYS)
+    parser.add_argument("--oos-windows", type=int, default=OOS_WINDOWS)
     parser.add_argument("--max-markets", type=int, default=5)
     parser.add_argument("--out", default="walk-forward-results")
     parser.add_argument("--start-balance", type=float, default=5.0)
     args = parser.parse_args()
     run_research(args.max_markets, args.days, output_dir=args.out,
-                 start_balance=args.start_balance)
+                 start_balance=args.start_balance, oos_windows=args.oos_windows)
 
 
 if __name__ == "__main__":

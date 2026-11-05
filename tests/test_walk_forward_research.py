@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import funding_aware_research as funding_research
 import hourly_candidate_research as hourly
-from walk_forward_research import (COSTS, DIRECTION_MODES, MIN_FUNDING_COVERAGE_PCT, RESEARCH_SYMBOLS, bootstrap_summaries, buy_hold_baseline, capital_feasibility_audit, funding_coverage, funding_coverage_is_acceptable, floor_to_hour, make_windows, select_research_markets, simulate_funding_audited, summarize, with_long_buy_hold_benchmark)
+from walk_forward_research import (COSTS, DIRECTION_MODES, MIN_FUNDING_COVERAGE_PCT, RESEARCH_SYMBOLS, bootstrap_summaries, buy_hold_baseline, capital_feasibility_audit, funding_coverage, funding_coverage_is_acceptable, floor_to_hour, make_windows, select_research_markets, simulate_funding_audited, summarize, validate_window_geometry, with_long_buy_hold_benchmark)
 
 
 class WalkForwardResearchTests(unittest.TestCase):
@@ -18,6 +18,22 @@ class WalkForwardResearchTests(unittest.TestCase):
         self.assertTrue(all(windows[i][2] == windows[i + 1][1] for i in range(3)))
         self.assertEqual(windows[-1][2], end)
         self.assertEqual(windows[-1][2] - windows[0][1], 240 * 86400)
+
+    def test_extended_windows_cover_600_days_without_overlap(self):
+        end = 2_000_000_000
+        windows = make_windows(end, count=20)
+        self.assertEqual(len(windows), 20)
+        self.assertTrue(all(windows[i][2] == windows[i + 1][1]
+                            for i in range(len(windows) - 1)))
+        self.assertEqual(windows[-1][2], end)
+        self.assertEqual(windows[-1][2] - windows[0][1], 600 * 86400)
+
+    def test_history_geometry_requires_125_day_warmup(self):
+        self.assertEqual(validate_window_geometry(725, 20), 125)
+        with self.assertRaises(ValueError):
+            validate_window_geometry(724, 20)
+        with self.assertRaises(ValueError):
+            validate_window_geometry(725, 0)
 
     def test_cost_scenarios_increase_costs(self):
         self.assertEqual(len(COSTS), 4)
