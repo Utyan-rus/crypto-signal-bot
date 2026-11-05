@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import funding_aware_research as funding_research
 import hourly_candidate_research as hourly
-from walk_forward_research import (COSTS, DIRECTION_MODES, MIN_FUNDING_COVERAGE_PCT, RESEARCH_SYMBOLS, bootstrap_summaries, buy_hold_baseline, capital_feasibility_audit, funding_coverage, funding_coverage_is_acceptable, floor_to_hour, make_windows, select_research_markets, simulate_funding_audited, summarize)
+from walk_forward_research import (COSTS, DIRECTION_MODES, MIN_FUNDING_COVERAGE_PCT, RESEARCH_SYMBOLS, bootstrap_summaries, buy_hold_baseline, capital_feasibility_audit, funding_coverage, funding_coverage_is_acceptable, floor_to_hour, make_windows, select_research_markets, simulate_funding_audited, summarize, with_long_buy_hold_benchmark)
 
 
 class WalkForwardResearchTests(unittest.TestCase):
@@ -101,6 +101,66 @@ class WalkForwardResearchTests(unittest.TestCase):
         self.assertAlmostEqual(result["funding_net_cost_usd"], 0.25)
         self.assertAlmostEqual(result["return_pct"], -0.5)
 
+    def test_short_hold_baseline_applies_inverse_price_and_signed_funding(self):
+        flat = [
+            {"t": 0, "o": 100.0, "c": 100.0},
+            {"t": 3600, "o": 100.0, "c": 100.0},
+            {"t": 7200, "o": 100.0, "c": 100.0},
+        ]
+        funded = buy_hold_baseline(
+            flat, 0, 10800, 50.0, 0.0, 0.0, 10.0,
+            funding={3600: 0.01, 7200: -0.005}, direction="SHORT"
+        )
+        self.assertTrue(funded["executable"])
+        self.assertEqual(funded["status"], "executable_1x_short_with_funding")
+        self.assertEqual(funded["funding_events_charged"], 2)
+        self.assertAlmostEqual(funded["funding_net_cost_usd"], -0.25)
+        self.assertAlmostEqual(funded["return_pct"], 0.5)
+
+        falling = [
+            {"t": 0, "o": 100.0, "c": 100.0},
+            {"t": 3600, "o": 90.0, "c": 80.0},
+        ]
+        rising = [
+            {"t": 0, "o": 100.0, "c": 100.0},
+            {"t": 3600, "o": 110.0, "c": 120.0},
+        ]
+        short_win = buy_hold_baseline(
+            falling, 0, 7200, 50.0, 0.0, 0.0, 10.0, direction="SHORT"
+        )
+        short_loss = buy_hold_baseline(
+            rising, 0, 7200, 50.0, 0.0, 0.0, 10.0, direction="SHORT"
+        )
+        self.assertAlmostEqual(short_win["return_pct"], 20.0)
+        self.assertAlmostEqual(short_loss["return_pct"], -20.0)
+        costed = buy_hold_baseline(
+            falling, 0, 7200, 50.0, 0.0005, 0.0005, 10.0, direction="SHORT"
+        )
+        self.assertLess(costed["return_pct"], short_win["return_pct"])
+
+    def test_hold_baseline_rejects_unknown_direction(self):
+        with self.assertRaises(ValueError):
+            buy_hold_baseline([], 0, 3600, 50.0, 0.0, 0.0, 10.0, direction="BOTH")
+
+    def test_long_benchmark_mapping_preserves_long_hold_fields(self):
+        mapped = with_long_buy_hold_benchmark([{
+            "buy_hold_executable": True,
+            "buy_hold_return_pct": 1.25,
+            "excess_vs_buy_hold_pp": -0.5,
+            "strategy_beats_buy_hold_observed": False,
+            "long_buy_hold_paired_evaluable": True,
+            "benchmark_executable": True,
+            "benchmark_return_pct": -2.0,
+            "observed_excess_return_vs_benchmark_pp": 1.5,
+            "strategy_beats_benchmark_observed": True,
+        }])[0]
+        self.assertTrue(mapped["benchmark_executable"])
+        self.assertEqual(mapped["benchmark_return_pct"], 1.25)
+        self.assertEqual(mapped["observed_excess_return_vs_benchmark_pp"], -0.5)
+        self.assertFalse(mapped["strategy_beats_benchmark_observed"])
+        self.assertTrue(mapped["paired_evaluable"])
+
+
     def test_funding_coverage_counts_exact_hourly_rows_and_reports_gaps(self):
         full = funding_coverage({0: 0.0, 3600: 0.001, 7200: -0.001}, 0, 10800)
         partial = funding_coverage({0: 0.0, 3600: 0.001}, 0, 10800)
@@ -191,6 +251,42 @@ class WalkForwardResearchTests(unittest.TestCase):
                                          block_length=2, seed=123)
         self.assertEqual(incomplete[0]["status"], "incomplete_grid")
 
+    def test_bootstrap_reports_directional_and_long_buy_hold_excess_separately(self):
+        symbols = ["BTC", "ETH"]
+        windows = ["w1", "w2", "w3", "w4"]
+        rows = []
+        for direction in ("LONG", "SHORT"):
+            for symbol_index, symbol in enumerate(symbols):
+                for window_index, window in enumerate(windows):
+                    strategy_return = (1.0 if direction == "LONG" else -1.0) + 0.1 * (window_index % 2)
+                    long_benchmark = 0.25
+                    directional_benchmark = 0.25 if direction == "LONG" else -0.5
+                    rows.append({
+                        "strategy": "donchian_20_10", "cost_scenario": "base",
+                        "symbol": symbol, "window": window, "start_balance": 50.0,
+                        "direction_mode": direction, "strategy_return_pct": strategy_return,
+                        "strategy_mtm_drawdown_pct": 2.0, "strategy_status": "tested",
+                        "strategy_trades": 10, "strategy_profit_factor": 1.2,
+                        "buy_hold_executable": True, "buy_hold_return_pct": long_benchmark,
+                        "long_buy_hold_paired_evaluable": True,
+                        "excess_vs_buy_hold_pp": strategy_return - long_benchmark,
+                        "strategy_beats_buy_hold_observed": strategy_return > long_benchmark,
+                        "benchmark_executable": True, "benchmark_return_pct": directional_benchmark,
+                        "paired_evaluable": True,
+                        "observed_excess_return_vs_benchmark_pp": strategy_return - directional_benchmark,
+                        "strategy_beats_benchmark_observed": strategy_return > directional_benchmark,
+                    })
+        result = bootstrap_summaries(rows, windows, symbols, replicates=100,
+                                     block_length=2, seed=321)
+        by_direction = {row["direction_mode"]: row for row in result}
+        short = by_direction["SHORT"]
+        self.assertAlmostEqual(short["mean_excess_vs_directional_benchmark_pp"], -0.45)
+        self.assertAlmostEqual(short["mean_excess_vs_long_buy_hold_pp"], -1.20)
+        self.assertIn("two_way_mean_excess_vs_directional_benchmark_pp_ci95_low", short)
+        self.assertIn("two_way_mean_excess_vs_long_buy_hold_pp_ci95_low", short)
+        self.assertEqual(short["directional_benchmark_role"], "1x short hold")
+
+
     def test_summary_ignores_incomplete_market_rows_without_cost_scenario(self):
         self.assertEqual(summarize([{
             "symbol": "BTC", "strategy": "ALL", "status": "incomplete_history"
@@ -243,6 +339,36 @@ class WalkForwardResearchTests(unittest.TestCase):
         self.assertEqual(set(by_direction), {"LONG", "SHORT"})
         self.assertEqual(by_direction["LONG"]["mean_return_pct"], 1.0)
         self.assertEqual(by_direction["SHORT"]["mean_return_pct"], -1.0)
+
+    def test_summary_reports_directional_and_long_benchmarks_separately(self):
+        common = {
+            "strategy": "s", "cost_scenario": "base", "status": "tested",
+            "symbol": "BTC", "window": "oos_1", "max_drawdown_mtm_pct": 2,
+            "trades": 10, "profit_factor": 1.2, "min_notional_rejections": 0,
+            "buy_hold_executable": True, "buy_hold_return_pct": 1.0,
+            "long_buy_hold_paired_evaluable": True, "paired_evaluable": True,
+        }
+        rows = [
+            {**common, "direction_mode": "LONG", "return_pct": 1.5,
+             "excess_vs_buy_hold_pp": 0.5, "strategy_beats_buy_hold_observed": True,
+             "benchmark_executable": True, "benchmark_return_pct": 1.0,
+             "observed_excess_return_vs_benchmark_pp": 0.5,
+             "strategy_beats_benchmark_observed": True},
+            {**common, "direction_mode": "SHORT", "return_pct": -1.0,
+             "excess_vs_buy_hold_pp": -2.0, "strategy_beats_buy_hold_observed": False,
+             "benchmark_executable": True, "benchmark_return_pct": -0.25,
+             "observed_excess_return_vs_benchmark_pp": -0.75,
+             "strategy_beats_benchmark_observed": False},
+        ]
+        result = summarize(rows)
+        by_direction = {row["direction_mode"]: row for row in result}
+        short = by_direction["SHORT"]
+        self.assertEqual(short["buy_hold_mean_return_pct"], 1.0)
+        self.assertEqual(short["mean_excess_vs_buy_hold_pp"], -2.0)
+        self.assertEqual(short["directional_benchmark_mean_return_pct"], -0.25)
+        self.assertEqual(short["mean_excess_vs_directional_benchmark_pp"], -0.75)
+        self.assertEqual(short["strategy_win_fraction_vs_directional_benchmark_pct"], 0.0)
+
 
     def test_bootstrap_summaries_keep_direction_grids_separate(self):
         symbols = ["BTC", "ETH"]

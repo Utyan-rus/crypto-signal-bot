@@ -49,8 +49,13 @@ def make_windows(end_ts, days=WINDOW_DAYS, count=OOS_WINDOWS):
 
 
 def buy_hold_baseline(candles, window_start, window_end, start_balance,
-                      fee_rate, slippage_rate, min_notional, funding=None):
-    """Costed 1x long perp baseline with the same signed historical funding."""
+                      fee_rate, slippage_rate, min_notional, funding=None,
+                      direction="LONG"):
+    """Costed 1x directional perp hold baseline with signed historical funding."""
+    direction = str(direction).upper()
+    if direction not in ("LONG", "SHORT"):
+        raise ValueError("direction must be LONG or SHORT")
+    direction_sign = 1.0 if direction == "LONG" else -1.0
     funding = funding or {}
     if start_balance < min_notional or start_balance <= 0:
         return {"executable": False, "status": "not_executable_below_min_notional",
@@ -62,7 +67,9 @@ def buy_hold_baseline(candles, window_start, window_end, start_balance,
                 "return_pct": None, "funding_net_cost_usd": 0.0,
                 "funding_events_charged": 0}
     entry_time = int(bars[0]["t"])
-    entry = bars[0]["o"] * (1 + slippage_rate)
+    entry_slippage = 1 + slippage_rate if direction == "LONG" else 1 - slippage_rate
+    exit_slippage = 1 - slippage_rate if direction == "LONG" else 1 + slippage_rate
+    entry = bars[0]["o"] * entry_slippage
     if entry <= 0:
         return {"executable": False, "status": "invalid_entry_price",
                 "return_pct": None, "funding_net_cost_usd": 0.0,
@@ -81,17 +88,44 @@ def buy_hold_baseline(candles, window_start, window_end, start_balance,
             mark = close_by_time.get(timestamp)
             if mark is None:
                 raise ValueError(f"funding timestamp {timestamp} has no matching hourly candle")
-            # Positive signed rate means longs pay; negative means longs receive.
-            funding_cost += qty * mark * float(rate)
+            # Positive signed rate means longs pay and shorts receive.
+            funding_cost += direction_sign * qty * mark * float(rate)
             funding_events += 1
-    exit_price = bars[-1]["c"] * (1 - slippage_rate)
-    gross = qty * (exit_price - entry)
+    exit_price = bars[-1]["c"] * exit_slippage
+    gross = direction_sign * qty * (exit_price - entry)
     fees = abs(qty * entry) * fee_rate + abs(qty * exit_price) * fee_rate
     pnl = gross - fees - funding_cost
-    return {"executable": True, "status": "executable_1x_long_with_funding",
+    return {"executable": True,
+            "status": f"executable_1x_{direction.lower()}_with_funding",
             "return_pct": round(100 * pnl / start_balance, 6),
             "funding_net_cost_usd": round(funding_cost, 8),
             "funding_events_charged": funding_events}
+
+
+def with_long_buy_hold_benchmark(rows):
+    """Copy rows while mapping the 1x long hold into generic benchmark fields."""
+    mapped = []
+    for row in rows:
+        item = dict(row)
+        item["benchmark_executable"] = row.get(
+            "buy_hold_executable", row.get("benchmark_executable", False)
+        )
+        item["benchmark_return_pct"] = row.get(
+            "buy_hold_return_pct", row.get("benchmark_return_pct")
+        )
+        item["observed_excess_return_vs_benchmark_pp"] = row.get(
+            "excess_vs_buy_hold_pp", row.get("observed_excess_return_vs_benchmark_pp")
+        )
+        item["strategy_beats_benchmark_observed"] = row.get(
+            "strategy_beats_buy_hold_observed",
+            row.get("strategy_beats_benchmark_observed", False),
+        )
+        item["paired_evaluable"] = row.get(
+            "long_buy_hold_paired_evaluable", row.get("paired_evaluable", False)
+        )
+        mapped.append(item)
+    return mapped
+
 
 
 def funding_coverage(funding, window_start, window_end):
@@ -178,7 +212,7 @@ def simulate_funding_audited(symbol, candles, strategy, test_start, test_end,
 
 
 def summarize(rows):
-    """Summarize each predeclared direction separately across market-windows."""
+    """Summarize fixed strategy/cost/direction groups against cash and both hold baselines."""
     out = []
     keys = sorted({
         (r["strategy"], r["cost_scenario"], str(r.get("direction_mode", "BOTH")).upper())
@@ -198,17 +232,74 @@ def summarize(rows):
               if r.get("profit_factor") not in ("", None)]
         drawdowns = [float(r.get("max_drawdown_mtm_pct", 0) or 0) for r in subset]
         trade_counts = [int(r.get("trades", 0) or 0) for r in subset]
-        benchmark = [r for r in subset if r.get("buy_hold_executable")
-                     and r.get("buy_hold_return_pct") not in ("", None)]
-        benchmark_returns = [float(r["buy_hold_return_pct"]) for r in benchmark]
-        paired = [r for r in subset if r.get("paired_evaluable")
-                  and r.get("excess_vs_buy_hold_pp") not in ("", None)]
-        excess = [float(r["excess_vs_buy_hold_pp"]) for r in paired]
-        benchmark_wins = [bool(r.get("strategy_beats_benchmark_observed")) for r in paired]
+
+        long_benchmark = [
+            r for r in subset
+            if r.get("buy_hold_executable", r.get("benchmark_executable"))
+            and r.get("buy_hold_return_pct", r.get("benchmark_return_pct")) not in ("", None)
+        ]
+        long_benchmark_returns = [
+            float(r.get("buy_hold_return_pct", r.get("benchmark_return_pct")))
+            for r in long_benchmark
+        ]
+        long_paired = [
+            r for r in subset
+            if r.get("long_buy_hold_paired_evaluable", r.get("paired_evaluable"))
+            and r.get("excess_vs_buy_hold_pp",
+                      r.get("observed_excess_return_vs_benchmark_pp")) not in ("", None)
+        ]
+        long_excess = [
+            float(r.get("excess_vs_buy_hold_pp",
+                        r.get("observed_excess_return_vs_benchmark_pp")))
+            for r in long_paired
+        ]
+        long_wins = [
+            bool(r.get("strategy_beats_buy_hold_observed",
+                       r.get("strategy_beats_benchmark_observed", False)))
+            for r in long_paired
+        ]
+
+        directional_benchmark = [
+            r for r in subset
+            if r.get("benchmark_executable", r.get("buy_hold_executable"))
+            and r.get("benchmark_return_pct", r.get("buy_hold_return_pct")) not in ("", None)
+        ]
+        directional_benchmark_returns = [
+            float(r.get("benchmark_return_pct", r.get("buy_hold_return_pct")))
+            for r in directional_benchmark
+        ]
+        directional_paired = [
+            r for r in subset
+            if r.get("paired_evaluable", r.get("long_buy_hold_paired_evaluable"))
+            and r.get("observed_excess_return_vs_benchmark_pp",
+                      r.get("excess_vs_buy_hold_pp")) not in ("", None)
+        ]
+        directional_excess = [
+            float(r.get("observed_excess_return_vs_benchmark_pp",
+                        r.get("excess_vs_buy_hold_pp")))
+            for r in directional_paired
+        ]
+        directional_wins = [
+            bool(r.get("strategy_beats_benchmark_observed",
+                       r.get("strategy_beats_buy_hold_observed", False)))
+            for r in directional_paired
+        ]
+
         funding_coverages = [float(r.get("funding_coverage_pct", 0) or 0) for r in subset]
         strategy_funding_costs = [float(r.get("funding_net_cost_usd", 0) or 0) for r in subset]
-        benchmark_funding_costs = [float(r.get("buy_hold_funding_net_cost_usd", 0) or 0) for r in subset]
-        funding_events = [int(r.get("funding_events_charged", 0) or 0) for r in subset]
+        long_funding_costs = [float(r.get("buy_hold_funding_net_cost_usd", 0) or 0) for r in subset]
+        directional_funding_costs = [
+            float(r.get("benchmark_funding_net_cost_usd",
+                        r.get("buy_hold_funding_net_cost_usd", 0)) or 0)
+            for r in subset
+        ]
+        long_funding_events = [int(r.get("buy_hold_funding_events_charged", 0) or 0) for r in subset]
+        directional_funding_events = [
+            int(r.get("benchmark_funding_events_charged",
+                      r.get("buy_hold_funding_events_charged", 0)) or 0)
+            for r in subset
+        ]
+        strategy_funding_events = [int(r.get("funding_events_charged", 0) or 0) for r in subset]
         out.append({
             "strategy": strategy,
             "cost_scenario": cost,
@@ -225,12 +316,23 @@ def summarize(rows):
             "positive_fraction_pct": round(100 * sum(x > 0 for x in returns) / len(returns), 1),
             "cash_baseline_return_pct": 0.0,
             "mean_excess_vs_cash_pp": round(statistics.mean(returns), 3),
-            "buy_hold_executable_market_windows": len(benchmark),
-            "buy_hold_mean_return_pct": round(statistics.mean(benchmark_returns), 3) if benchmark_returns else "",
-            "mean_excess_vs_buy_hold_pp": round(statistics.mean(excess), 3) if excess else "",
+            "buy_hold_executable_market_windows": len(long_benchmark),
+            "buy_hold_mean_return_pct": round(statistics.mean(long_benchmark_returns), 3) if long_benchmark_returns else "",
+            "mean_excess_vs_buy_hold_pp": round(statistics.mean(long_excess), 3) if long_excess else "",
             "strategy_win_fraction_vs_buy_hold_pct": round(
-                100 * sum(benchmark_wins) / len(benchmark_wins), 1
-            ) if benchmark_wins else "",
+                100 * sum(long_wins) / len(long_wins), 1
+            ) if long_wins else "",
+            "directional_benchmark_executable_market_windows": len(directional_benchmark),
+            "directional_benchmark_mean_return_pct": (
+                round(statistics.mean(directional_benchmark_returns), 3)
+                if directional_benchmark_returns else ""
+            ),
+            "mean_excess_vs_directional_benchmark_pp": (
+                round(statistics.mean(directional_excess), 3) if directional_excess else ""
+            ),
+            "strategy_win_fraction_vs_directional_benchmark_pct": round(
+                100 * sum(directional_wins) / len(directional_wins), 1
+            ) if directional_wins else "",
             "mean_mtm_drawdown_pct": round(statistics.mean(drawdowns), 3),
             "total_trades": sum(trade_counts),
             "pf_eligible_windows": len(pf),
@@ -239,15 +341,19 @@ def summarize(rows):
             "historical_funding_coverage_pct": round(statistics.mean(funding_coverages), 3) if funding_coverages else 0.0,
             "minimum_funding_coverage_pct": round(min(funding_coverages), 3) if funding_coverages else 0.0,
             "total_strategy_funding_net_cost_usd": round(sum(strategy_funding_costs), 8),
-            "total_buy_hold_funding_net_cost_usd": round(sum(benchmark_funding_costs), 8),
-            "total_strategy_funding_events": sum(funding_events),
+            "total_buy_hold_funding_net_cost_usd": round(sum(long_funding_costs), 8),
+            "total_directional_benchmark_funding_net_cost_usd": round(sum(directional_funding_costs), 8),
+            "total_buy_hold_funding_events": sum(long_funding_events),
+            "total_directional_benchmark_funding_events": sum(directional_funding_events),
+            "total_strategy_funding_events": sum(strategy_funding_events),
         })
     return out
 
 
+
 def bootstrap_summaries(rows, windows, symbols, replicates=BOOTSTRAP_REPLICATES,
                         block_length=BOOTSTRAP_BLOCK_LENGTH, seed=BOOTSTRAP_SEED):
-    """Two-way market/time bootstrap for each fixed strategy/cost/direction group."""
+    """Two-way market/time bootstrap for directional and 1x-long benchmark comparisons."""
     output = []
     keys = sorted({
         (r["strategy"], r["cost_scenario"], str(r.get("direction_mode", "BOTH")).upper())
@@ -258,7 +364,9 @@ def bootstrap_summaries(rows, windows, symbols, replicates=BOOTSTRAP_REPLICATES,
         group = [r for r in rows if r.get("strategy") == strategy
                  and r.get("cost_scenario") == cost
                  and str(r.get("direction_mode", "BOTH")).upper() == direction]
+        long_group = with_long_buy_hold_benchmark(group)
         point = paired_metrics(group)
+        long_point = paired_metrics(long_group)
         run_seed = seed + index
         try:
             intervals = two_way_bootstrap(
@@ -268,12 +376,46 @@ def bootstrap_summaries(rows, windows, symbols, replicates=BOOTSTRAP_REPLICATES,
             status, error = "ok", ""
         except ValueError as exc:
             intervals, status, error = {}, "incomplete_grid", str(exc)
+        try:
+            long_intervals = two_way_bootstrap(
+                long_group, windows, symbols, replicates=replicates,
+                block_length=block_length, seed=run_seed
+            )
+            long_status, long_error = "ok", ""
+        except ValueError as exc:
+            long_intervals, long_status, long_error = {}, "incomplete_grid", str(exc)
+
+        long_interval_aliases = {}
+        for source_key, target_key in (
+            ("two_way_benchmark_mean_return_pct_ci95_low",
+             "two_way_long_buy_hold_mean_return_pct_ci95_low"),
+            ("two_way_benchmark_mean_return_pct_ci95_high",
+             "two_way_long_buy_hold_mean_return_pct_ci95_high"),
+            ("two_way_mean_excess_vs_benchmark_pp_ci95_low",
+             "two_way_mean_excess_vs_long_buy_hold_pp_ci95_low"),
+            ("two_way_mean_excess_vs_benchmark_pp_ci95_high",
+             "two_way_mean_excess_vs_long_buy_hold_pp_ci95_high"),
+            ("two_way_median_excess_vs_benchmark_pp_ci95_low",
+             "two_way_median_excess_vs_long_buy_hold_pp_ci95_low"),
+            ("two_way_median_excess_vs_benchmark_pp_ci95_high",
+             "two_way_median_excess_vs_long_buy_hold_pp_ci95_high"),
+            ("two_way_benchmark_win_fraction_pct_ci95_low",
+             "two_way_long_buy_hold_win_fraction_pct_ci95_low"),
+            ("two_way_benchmark_win_fraction_pct_ci95_high",
+             "two_way_long_buy_hold_win_fraction_pct_ci95_high"),
+        ):
+            if source_key in long_intervals:
+                long_interval_aliases[target_key] = long_intervals[source_key]
+
         output.append({
             "strategy": strategy,
             "cost_scenario": cost,
             "direction_mode": direction,
+            "directional_benchmark_role": "1x short hold" if direction == "SHORT" else "1x long hold",
             "status": status,
             "error": error,
+            "long_buy_hold_bootstrap_status": long_status,
+            "long_buy_hold_bootstrap_error": long_error,
             "markets": len(symbols),
             "oos_windows": len(windows),
             "market_window_rows": point["rows"],
@@ -289,13 +431,28 @@ def bootstrap_summaries(rows, windows, symbols, replicates=BOOTSTRAP_REPLICATES,
             "mean_excess_vs_benchmark_pp": round(point["mean_excess_vs_benchmark_pp"], 4) if point["mean_excess_vs_benchmark_pp"] is not None else "",
             "median_excess_vs_benchmark_pp": round(point["median_excess_vs_benchmark_pp"], 4) if point["median_excess_vs_benchmark_pp"] is not None else "",
             "strategy_win_fraction_vs_benchmark_pct": round(point["benchmark_win_fraction_pct"], 2) if point["benchmark_win_fraction_pct"] is not None else "",
+            "directional_benchmark_mean_return_pct": round(point["benchmark_mean_return_pct"], 4) if point["benchmark_mean_return_pct"] is not None else "",
+            "mean_excess_vs_directional_benchmark_pp": round(point["mean_excess_vs_benchmark_pp"], 4) if point["mean_excess_vs_benchmark_pp"] is not None else "",
+            "median_excess_vs_directional_benchmark_pp": round(point["median_excess_vs_benchmark_pp"], 4) if point["median_excess_vs_benchmark_pp"] is not None else "",
+            "strategy_win_fraction_vs_directional_benchmark_pct": round(point["benchmark_win_fraction_pct"], 2) if point["benchmark_win_fraction_pct"] is not None else "",
+            "long_buy_hold_mean_return_pct": round(long_point["benchmark_mean_return_pct"], 4) if long_point["benchmark_mean_return_pct"] is not None else "",
+            "mean_excess_vs_long_buy_hold_pp": round(long_point["mean_excess_vs_benchmark_pp"], 4) if long_point["mean_excess_vs_benchmark_pp"] is not None else "",
+            "median_excess_vs_long_buy_hold_pp": round(long_point["median_excess_vs_benchmark_pp"], 4) if long_point["median_excess_vs_benchmark_pp"] is not None else "",
+            "strategy_win_fraction_vs_long_buy_hold_pct": round(long_point["benchmark_win_fraction_pct"], 2) if long_point["benchmark_win_fraction_pct"] is not None else "",
             "bootstrap_replicates": replicates,
             "bootstrap_block_length_windows": block_length,
             "bootstrap_seed": run_seed,
             "bootstrap_method": "two_way_market_resampling_plus_contiguous_window_blocks",
+            "two_way_directional_benchmark_mean_return_pct_ci95_low": intervals.get("two_way_benchmark_mean_return_pct_ci95_low", ""),
+            "two_way_directional_benchmark_mean_return_pct_ci95_high": intervals.get("two_way_benchmark_mean_return_pct_ci95_high", ""),
+            "two_way_mean_excess_vs_directional_benchmark_pp_ci95_low": intervals.get("two_way_mean_excess_vs_benchmark_pp_ci95_low", ""),
+            "two_way_mean_excess_vs_directional_benchmark_pp_ci95_high": intervals.get("two_way_mean_excess_vs_benchmark_pp_ci95_high", ""),
             **intervals,
+            **long_interval_aliases,
         })
     return output
+
+
 
 
 RESEARCH_SYMBOLS = ("BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "LINK", "LTC")
@@ -355,7 +512,8 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
             {"name": name, "fee_per_side": fee, "slippage_per_side": slip}
             for name, fee, slip in COSTS
         ],
-        "funding": "included: signed hourly historical funding applied to open positions and 1x long benchmark",
+        "funding": "included: signed hourly historical funding applied to open positions and both 1x long and 1x short hold benchmarks",
+        "directional_benchmark_rule": "BOTH and LONG compare to 1x long hold; SHORT compares to 1x short hold; every row also retains the 1x long hold and cash baselines.",
         "funding_source": "Lighter public /api/v1/fundings?resolution=1h",
         "funding_sign_convention": "positive rate with direction=long means longs pay; direction=short means shorts pay",
         "funding_mark_price_assumption": "funding is applied at its matching hourly candle timestamp using that candle close, mirroring the existing funding-aware simulator; exact settlement-mark alignment remains an assumption",
@@ -366,7 +524,12 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
         "buy_hold_baseline": (
             "not_executable_below_min_notional"
             if start_balance < hourly.MIN_NOTIONAL
-            else "1x long perpetual buy-and-hold; same per-side fees/slippage and signed historical funding"
+            else "1x long perpetual hold; same per-side fees/slippage and signed historical funding"
+        ),
+        "short_hold_baseline": (
+            "not_executable_below_min_notional"
+            if start_balance < hourly.MIN_NOTIONAL
+            else "1x short perpetual hold; same per-side fees/slippage and inverse signed historical funding"
         ),
         "bootstrap": {
             "replicates": BOOTSTRAP_REPLICATES,
@@ -455,14 +618,27 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
                             symbol, candles, strategy, window_start, window_end,
                             funding, start_balance, fee, slip, direction_mode
                         )
-                        benchmark = buy_hold_baseline(
+                        long_benchmark = buy_hold_baseline(
                             candles, window_start, window_end, start_balance,
-                            fee, slip, hourly.MIN_NOTIONAL, funding=funding
+                            fee, slip, hourly.MIN_NOTIONAL, funding=funding, direction="LONG"
                         )
-                        excess = (
-                            row["return_pct"] - benchmark["return_pct"]
-                            if benchmark["executable"] else None
+                        short_benchmark = buy_hold_baseline(
+                            candles, window_start, window_end, start_balance,
+                            fee, slip, hourly.MIN_NOTIONAL, funding=funding, direction="SHORT"
                         )
+                        directional_direction = "SHORT" if direction_mode == "SHORT" else "LONG"
+                        directional_benchmark = (
+                            short_benchmark if directional_direction == "SHORT" else long_benchmark
+                        )
+                        long_excess = (
+                            row["return_pct"] - long_benchmark["return_pct"]
+                            if long_benchmark["executable"] else None
+                        )
+                        directional_excess = (
+                            row["return_pct"] - directional_benchmark["return_pct"]
+                            if directional_benchmark["executable"] else None
+                        )
+                        coverage_ok = funding_coverage_is_acceptable(coverage)
                         row.update({
                             "window": window_name,
                             "window_start_utc": window_start,
@@ -485,27 +661,45 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
                             "cash_return_pct": 0.0,
                             "cash_baseline_return_pct": 0.0,
                             "excess_vs_cash_pp": row["return_pct"],
-                            "buy_hold_executable": benchmark["executable"],
-                            "buy_hold_status": benchmark["status"],
-                            "buy_hold_return_pct": benchmark["return_pct"],
+                            "buy_hold_executable": long_benchmark["executable"],
+                            "buy_hold_status": long_benchmark["status"],
+                            "buy_hold_return_pct": long_benchmark["return_pct"],
                             "buy_hold_min_quote_notional_usd": hourly.MIN_NOTIONAL,
-                            "buy_hold_method": "1x long perpetual; same fees/slippage and signed historical funding",
-                            "buy_hold_funding_net_cost_usd": benchmark["funding_net_cost_usd"],
-                            "buy_hold_funding_events_charged": benchmark["funding_events_charged"],
-                            "excess_vs_buy_hold_pp": excess,
-                            "paired_evaluable": bool(
-                                benchmark["executable"]
-                                and funding_coverage_is_acceptable(coverage)
+                            "buy_hold_method": "1x long perpetual hold; same fees/slippage and signed historical funding",
+                            "buy_hold_funding_net_cost_usd": long_benchmark["funding_net_cost_usd"],
+                            "buy_hold_funding_events_charged": long_benchmark["funding_events_charged"],
+                            "excess_vs_buy_hold_pp": long_excess,
+                            "strategy_beats_buy_hold_observed": bool(long_excess is not None and long_excess > 0),
+                            "long_buy_hold_paired_evaluable": bool(
+                                long_benchmark["executable"] and coverage_ok
                             ),
+                            "short_hold_executable": short_benchmark["executable"],
+                            "short_hold_status": short_benchmark["status"],
+                            "short_hold_return_pct": short_benchmark["return_pct"],
+                            "short_hold_method": "1x short perpetual hold; same fees/slippage and inverse signed historical funding",
+                            "short_hold_funding_net_cost_usd": short_benchmark["funding_net_cost_usd"],
+                            "short_hold_funding_events_charged": short_benchmark["funding_events_charged"],
+                            "short_hold_paired_evaluable": bool(
+                                short_benchmark["executable"] and coverage_ok
+                            ),
+                            "directional_benchmark_direction": directional_direction,
+                            "directional_benchmark_method": f"1x {directional_direction.lower()} perpetual hold; same fees/slippage and signed funding",
+                            "benchmark_status": directional_benchmark["status"],
+                            "benchmark_funding_net_cost_usd": directional_benchmark["funding_net_cost_usd"],
+                            "benchmark_funding_events_charged": directional_benchmark["funding_events_charged"],
+                            "excess_vs_directional_benchmark_pp": directional_excess,
+                            "paired_evaluable": bool(directional_benchmark["executable"] and coverage_ok),
                             "strategy_return_pct": row["return_pct"],
                             "strategy_mtm_drawdown_pct": row["max_drawdown_mtm_pct"],
                             "strategy_status": row["status"],
                             "strategy_trades": row["trades"],
                             "strategy_profit_factor": row["profit_factor"],
-                            "benchmark_executable": benchmark["executable"],
-                            "benchmark_return_pct": benchmark["return_pct"],
-                            "observed_excess_return_vs_benchmark_pp": excess,
-                            "strategy_beats_benchmark_observed": bool(excess is not None and excess > 0),
+                            "benchmark_executable": directional_benchmark["executable"],
+                            "benchmark_return_pct": directional_benchmark["return_pct"],
+                            "observed_excess_return_vs_benchmark_pp": directional_excess,
+                            "strategy_beats_benchmark_observed": bool(
+                                directional_excess is not None and directional_excess > 0
+                            ),
                             "fixed_parameters": True,
                         })
                         results.append(row)
@@ -531,11 +725,19 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
                   "positive_market_windows", "positive_fraction_pct", "cash_baseline_return_pct",
                   "mean_excess_vs_cash_pp", "buy_hold_executable_market_windows",
                   "buy_hold_mean_return_pct", "mean_excess_vs_buy_hold_pp",
-                  "strategy_win_fraction_vs_buy_hold_pct", "mean_mtm_drawdown_pct", "total_trades",
+                  "strategy_win_fraction_vs_buy_hold_pct", "directional_benchmark_executable_market_windows",
+                  "directional_benchmark_mean_return_pct", "mean_excess_vs_directional_benchmark_pp",
+                  "strategy_win_fraction_vs_directional_benchmark_pct", "mean_mtm_drawdown_pct", "total_trades",
                   "pf_eligible_windows", "mean_profit_factor", "min_notional_rejections",
                   "historical_funding_coverage_pct", "minimum_funding_coverage_pct",
                   "total_strategy_funding_net_cost_usd", "total_buy_hold_funding_net_cost_usd",
-                  "total_strategy_funding_events"]
+                  "total_directional_benchmark_funding_net_cost_usd", "total_buy_hold_funding_events",
+                  "total_directional_benchmark_funding_events", "total_strategy_funding_events"]
+                  "pf_eligible_windows", "mean_profit_factor", "min_notional_rejections",
+                  "historical_funding_coverage_pct", "minimum_funding_coverage_pct",
+                  "total_strategy_funding_net_cost_usd", "total_buy_hold_funding_net_cost_usd",
+                  "total_directional_benchmark_funding_net_cost_usd", "total_buy_hold_funding_events",
+                  "total_directional_benchmark_funding_events", "total_strategy_funding_events"]
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         writer.writerows(summary)
@@ -555,16 +757,22 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
         strategy_rows = [row for row in results if row.get("strategy") == strategy]
         if not strategy_rows:
             continue
-        strategy_lomo = leave_one_market_out(
-            strategy_rows, [start_balance], [cost[0] for cost in COSTS],
-            list(DIRECTION_MODES), window_names, symbols
+        benchmark_groups = (
+            ("directional_hold", strategy_rows),
+            ("long_buy_hold", with_long_buy_hold_benchmark(strategy_rows)),
         )
-        for item in strategy_lomo:
-            expected = (len(symbols) if item["omitted_symbol"] == "NONE"
-                        else len(symbols) - 1) * len(window_names)
-            item["strategy"] = strategy
-            item["grid_complete"] = item["market_window_rows"] == expected
-            lomo_rows.append(item)
+        for benchmark_role, audit_rows in benchmark_groups:
+            strategy_lomo = leave_one_market_out(
+                audit_rows, [start_balance], [cost[0] for cost in COSTS],
+                list(DIRECTION_MODES), window_names, symbols
+            )
+            for item in strategy_lomo:
+                expected = (len(symbols) if item["omitted_symbol"] == "NONE"
+                            else len(symbols) - 1) * len(window_names)
+                item["strategy"] = strategy
+                item["benchmark_role"] = benchmark_role
+                item["grid_complete"] = item["market_window_rows"] == expected
+                lomo_rows.append(item)
     with open(os.path.join(output_dir, "walk_forward_leave_one_market_out.csv"),
               "w", newline="", encoding="utf-8") as f:
         fields = sorted({key for row in lomo_rows for key in row})
@@ -579,7 +787,9 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
               f"positive {row['positive_market_windows']}/{row['observations']}, "
               f"active {row['active_market_windows']}, no-trade {row['no_trade_market_windows']}, "
               f"min-notional rejects {row['min_notional_rejections']}, "
-              f"buy-hold {row['buy_hold_mean_return_pct']}, excess {row['mean_excess_vs_buy_hold_pp']}, "
+              f"long-hold {row['buy_hold_mean_return_pct']}, excess-long {row['mean_excess_vs_buy_hold_pp']}, "
+              f"directional-hold {row['directional_benchmark_mean_return_pct']}, "
+              f"excess-directional {row['mean_excess_vs_directional_benchmark_pp']}, "
               f"DD {row['mean_mtm_drawdown_pct']:.2f}%, PF {row['mean_profit_factor']}, "
               f"trades {row['total_trades']}")
     print("TWO-WAY BOOTSTRAP (10,000 replicates; 2-window contiguous blocks):")
@@ -588,8 +798,10 @@ def run_research(max_markets=5, days=CONTEXT_DAYS, end_ts=None,
             print(f"  {row['strategy']}/{row['direction_mode']}/{row['cost_scenario']}: "
                   f"mean CI95=[{row.get('two_way_mean_return_pct_ci95_low')},"
                   f"{row.get('two_way_mean_return_pct_ci95_high')}], "
-                  f"excess-vs-buy-hold CI95=[{row.get('two_way_mean_excess_vs_benchmark_pp_ci95_low')},"
-                  f"{row.get('two_way_mean_excess_vs_benchmark_pp_ci95_high')}]")
+                  f"excess-vs-{row['directional_benchmark_role']} CI95=[{row.get('two_way_mean_excess_vs_directional_benchmark_pp_ci95_low')},"
+                  f"{row.get('two_way_mean_excess_vs_directional_benchmark_pp_ci95_high')}], "
+                  f"excess-vs-long-buy-hold CI95=[{row.get('two_way_mean_excess_vs_long_buy_hold_pp_ci95_low')},"
+                  f"{row.get('two_way_mean_excess_vs_long_buy_hold_pp_ci95_high')}]")
         else:
             print(f"  {row['strategy']}/{row['cost_scenario']}: CI not computed ({row['error']})")
     minimum_coverage = min((row["funding_coverage_pct"] for row in coverage_rows), default=0.0)
