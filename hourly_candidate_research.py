@@ -58,6 +58,38 @@ def rolling_low(values, period, end_exclusive=True):
     return out
 
 
+def rolling_mean(values, period):
+    out = [None] * len(values)
+    for i in range(period - 1, len(values)):
+        out[i] = sum(values[i-period+1:i+1]) / period
+    return out
+
+
+def rolling_std(values, period):
+    out = [None] * len(values)
+    for i in range(period - 1, len(values)):
+        chunk = values[i-period+1:i+1]
+        mean = sum(chunk) / period
+        out[i] = (sum((x-mean)**2 for x in chunk) / period) ** 0.5
+    return out
+
+
+def rsi_values(values, period=14):
+    out = [None] * len(values)
+    if len(values) <= period:
+        return out
+    gains = [max(values[i]-values[i-1], 0.0) for i in range(1, len(values))]
+    losses = [max(values[i-1]-values[i], 0.0) for i in range(1, len(values))]
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    out[period] = 100.0 if avg_loss == 0 else 100.0 - 100.0 / (1.0 + avg_gain/avg_loss)
+    for i in range(period + 1, len(values)):
+        avg_gain = (avg_gain*(period-1) + gains[i-1]) / period
+        avg_loss = (avg_loss*(period-1) + losses[i-1]) / period
+        out[i] = 100.0 if avg_loss == 0 else 100.0 - 100.0 / (1.0 + avg_gain/avg_loss)
+    return out
+
+
 def build_model(candles, name):
     close = [b["c"] for b in candles]
     high = [b["h"] for b in candles]
@@ -70,6 +102,9 @@ def build_model(candles, name):
     exit_high = rolling_high(high, 10)
     signals = {}
     exits = {}
+    bb_mid = rolling_mean(close, 20)
+    bb_std = rolling_std(close, 20)
+    rsi = rsi_values(close, 14)
     for i, b in enumerate(candles):
         if a[i] is None or a[i] <= 0 or e200[i] is None:
             continue
@@ -107,6 +142,38 @@ def build_model(candles, name):
             threshold = e800[i] * 0.99 if e800[i] is not None else None
             exits[b["t"]] = (threshold, threshold)
             stop_dist = max(close[i] * 0.15, 2.5 * a[i])
+        elif name == "mean_reversion_bollinger":
+            # Fade a statistically stretched close only with RSI exhaustion confirmation.
+            if bb_mid[i] is not None and bb_std[i] is not None and rsi[i] is not None:
+                upper, lower = bb_mid[i] + 2.0*bb_std[i], bb_mid[i] - 2.0*bb_std[i]
+                if close[i] < lower and rsi[i] <= 30:
+                    side = "LONG"
+                elif close[i] > upper and rsi[i] >= 70:
+                    side = "SHORT"
+                exits[b["t"]] = (bb_mid[i], bb_mid[i])
+            stop_dist = max(1.5*a[i], close[i]*0.003)
+        elif name == "adaptive_regime_switch":
+            # Fixed causal regime rule: breakouts in directional regimes,
+            # Bollinger mean reversion only when the long EMA slope is flat.
+            slope = ((e200[i] - e200[i-24]) / close[i]
+                     if i >= 24 and e200[i-24] is not None else 0.0)
+            if slope >= 0.001 and close[i] > e200[i] and don_high[i] is not None:
+                if close[i] > don_high[i]:
+                    side = "LONG"
+                exits[b["t"]] = (exit_low[i], exit_high[i])
+            elif slope <= -0.001 and close[i] < e200[i] and don_low[i] is not None:
+                if close[i] < don_low[i]:
+                    side = "SHORT"
+                exits[b["t"]] = (exit_low[i], exit_high[i])
+            else:
+                if bb_mid[i] is not None and bb_std[i] is not None and rsi[i] is not None:
+                    upper, lower = bb_mid[i] + 2.0*bb_std[i], bb_mid[i] - 2.0*bb_std[i]
+                    if close[i] < lower and rsi[i] <= 30:
+                        side = "LONG"
+                    elif close[i] > upper and rsi[i] >= 70:
+                        side = "SHORT"
+                    exits[b["t"]] = (bb_mid[i], bb_mid[i])
+                stop_dist = max(1.5*a[i], close[i]*0.003)
         if side:
             signals[b["t"]] = (side, max(stop_dist, close[i] * 0.003))
     return signals, exits

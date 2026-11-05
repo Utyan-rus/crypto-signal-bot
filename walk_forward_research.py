@@ -16,7 +16,8 @@ import funding_aware_research as funding_research
 from backtest import fetch_candles, get_markets
 from two_way_bootstrap_audit import leave_one_market_out, metrics as paired_metrics, two_way_bootstrap
 
-STRATEGIES = ("donchian_20_10", "ema_20_50_cross", "ema_trend_pullback")
+STRATEGIES = ("donchian_20_10", "ema_20_50_cross", "ema_trend_pullback",
+              "mean_reversion_bollinger", "adaptive_regime_switch")
 DIRECTION_MODES = ("BOTH", "LONG", "SHORT")
 WINDOW_DAYS = 30
 OOS_WINDOWS = 8

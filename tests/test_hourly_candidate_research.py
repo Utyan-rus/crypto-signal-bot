@@ -17,10 +17,11 @@ class HourlyCandidateResearchTests(unittest.TestCase):
             })
 
     def test_indicator_context_produces_no_future_candle_signal(self):
-        signals, _ = build_model(self.candles, "donchian_20_10")
         candle_times = {b["t"] for b in self.candles}
-        self.assertTrue(set(signals).issubset(candle_times))
-        self.assertTrue(all(t < self.candles[-1]["t"] for t in signals))
+        for strategy in ("donchian_20_10", "mean_reversion_bollinger", "adaptive_regime_switch"):
+            signals, _ = build_model(self.candles, strategy)
+            self.assertTrue(set(signals).issubset(candle_times))
+            self.assertTrue(all(t < self.candles[-1]["t"] for t in signals))
 
     def test_minimum_notional_never_forces_excess_risk(self):
         self.assertEqual(MIN_NOTIONAL, 10.0)
@@ -54,7 +55,9 @@ class HourlyCandidateResearchTests(unittest.TestCase):
             self.assertIn(key, result)
 
     def test_strategy_names_are_supported(self):
-        for name in ("donchian_20_10", "ema_trend_pullback", "ema_20_50_cross", "ema_20_50_cross_spread"):
+        for name in ("donchian_20_10", "ema_trend_pullback", "ema_20_50_cross",
+                     "ema_20_50_cross_spread", "mean_reversion_bollinger",
+                     "adaptive_regime_switch"):
             signals, exits = build_model(self.candles, name)
             self.assertIsInstance(signals, dict)
             self.assertIsInstance(exits, dict)

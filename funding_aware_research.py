@@ -7,7 +7,13 @@ import json
 import os
 import time
 from backtest import fetch_candles, get_json, get_markets
-from hourly_candidate_research import FEE, SLIPPAGE, START_BALANCE, build_model, size_position, max_dd
+import hourly_candidate_research as hourly
+from hourly_candidate_research import FEE, SLIPPAGE, START_BALANCE, size_position, max_dd
+
+
+def build_model(candles, strategy):
+    # Resolve the strategy implementation dynamically for funding-aware comparisons.
+    return hourly.build_model(candles, strategy)
 
 def fetch_funding_rates(market_id, start_ts, end_ts):
     """Fetch hourly history in <=700-hour chunks; return timestamp -> signed rate."""
