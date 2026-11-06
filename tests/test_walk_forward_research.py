@@ -35,6 +35,18 @@ class WalkForwardResearchTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_window_geometry(725, 0)
 
+    def test_disjoint_245_day_holdout_has_fixed_warmup_and_four_windows(self):
+        # This OOS period ends before the later paired Donchian dataset begins.
+        end = 1759366800  # 2025-10-02 01:00 UTC
+        self.assertEqual(validate_window_geometry(245, 4), 125)
+        windows = make_windows(end, count=4)
+        self.assertEqual(len(windows), 4)
+        self.assertTrue(all(windows[i][2] == windows[i + 1][1]
+                            for i in range(len(windows) - 1)))
+        self.assertEqual(windows[0][1], end - 120 * 86400)
+        self.assertEqual(windows[-1][2], end)
+        self.assertLessEqual(end, 1759369802)  # paired dataset history start
+
     def test_cost_scenarios_increase_costs(self):
         self.assertEqual(len(COSTS), 4)
         self.assertLess(COSTS[0][1], COSTS[1][1])
