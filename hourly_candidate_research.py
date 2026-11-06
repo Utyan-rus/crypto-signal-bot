@@ -95,6 +95,7 @@ def build_model(candles, name):
     high = [b["h"] for b in candles]
     low = [b["l"] for b in candles]
     a = atr(candles)
+    a_slow = atr(candles, 100)
     e20, e50, e200, e800 = ema(close, 20), ema(close, 50), ema(close, 200), ema(close, 800)
     don_high = rolling_high(high, 20)
     don_low = rolling_low(low, 20)
@@ -174,6 +175,26 @@ def build_model(candles, name):
                         side = "SHORT"
                     exits[b["t"]] = (bb_mid[i], bb_mid[i])
                 stop_dist = max(1.5*a[i], close[i]*0.003)
+        elif name in ("donchian_long_regime", "donchian_long_regime_vol"):
+            # Fixed, causal long-only filter: 20h breakout, price above EMA200,
+            # and EMA200 rising by at least 0.1% over 24h.
+            slope_ok = (
+                i >= 24 and e200[i-24] is not None
+                and e200[i] >= e200[i-24] * 1.001
+            )
+            vol_ok = (
+                name == "donchian_long_regime"
+                or (
+                    a_slow[i] is not None
+                    and a[i] <= 1.25 * a_slow[i]
+                    and a[i] / close[i] <= 0.03
+                )
+            )
+            if (slope_ok and close[i] > e200[i] and don_high[i] is not None
+                    and close[i] > don_high[i] and vol_ok):
+                side = "LONG"
+            exits[b["t"]] = (exit_low[i], exit_high[i])
+            stop_dist = max(2.5*a[i], close[i]*0.003)
         if side:
             signals[b["t"]] = (side, max(stop_dist, close[i] * 0.003))
     return signals, exits

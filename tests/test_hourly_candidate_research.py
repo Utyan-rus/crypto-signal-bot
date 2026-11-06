@@ -18,7 +18,8 @@ class HourlyCandidateResearchTests(unittest.TestCase):
 
     def test_indicator_context_produces_no_future_candle_signal(self):
         candle_times = {b["t"] for b in self.candles}
-        for strategy in ("donchian_20_10", "mean_reversion_bollinger", "adaptive_regime_switch"):
+        for strategy in ("donchian_20_10", "mean_reversion_bollinger", "adaptive_regime_switch",
+                         "donchian_long_regime", "donchian_long_regime_vol"):
             signals, _ = build_model(self.candles, strategy)
             self.assertTrue(set(signals).issubset(candle_times))
             self.assertTrue(all(t < self.candles[-1]["t"] for t in signals))
@@ -57,10 +58,16 @@ class HourlyCandidateResearchTests(unittest.TestCase):
     def test_strategy_names_are_supported(self):
         for name in ("donchian_20_10", "ema_trend_pullback", "ema_20_50_cross",
                      "ema_20_50_cross_spread", "mean_reversion_bollinger",
-                     "adaptive_regime_switch"):
+                     "adaptive_regime_switch", "donchian_long_regime",
+                     "donchian_long_regime_vol"):
             signals, exits = build_model(self.candles, name)
             self.assertIsInstance(signals, dict)
             self.assertIsInstance(exits, dict)
+
+    def test_new_regime_strategies_are_long_only(self):
+        for name in ("donchian_long_regime", "donchian_long_regime_vol"):
+            signals, _ = build_model(self.candles, name)
+            self.assertTrue(all(side == "LONG" for side, _ in signals.values()))
 
 
 if __name__ == "__main__":

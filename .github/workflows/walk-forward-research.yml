@@ -29,6 +29,11 @@ on:
         default: "10"
         type: choice
         options: ["5", "10"]
+      end_timestamp:
+        description: "UTC end timestamp for the independent historical holdout"
+        required: true
+        default: "1762300800"
+        type: string
 
 permissions:
   contents: read
@@ -46,8 +51,8 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Run unit tests
         run: python -m unittest discover -s tests -p 'test_walk_forward_research.py' -v
-      - name: Compare five strategy candidates over eight OOS windows
-        run: python walk_forward_research.py --days 365 --oos-windows 8 --max-markets "${{ inputs.max_markets || '10' }}" --start-balance "${{ inputs.start_balance || '50' }}" --out walk-forward-results
+      - name: Compare seven fixed strategies on the disjoint historical holdout
+        run: python walk_forward_research.py --days 365 --oos-windows 8 --max-markets "${{ inputs.max_markets || '10' }}" --start-balance "${{ inputs.start_balance || '50' }}" --end-timestamp "${{ inputs.end_timestamp || '1762300800' }}" --out walk-forward-results
       - uses: actions/upload-artifact@v4
         if: always()
         with:

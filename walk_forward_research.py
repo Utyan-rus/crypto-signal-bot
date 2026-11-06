@@ -17,7 +17,8 @@ from backtest import fetch_candles, get_markets
 from two_way_bootstrap_audit import leave_one_market_out, metrics as paired_metrics, two_way_bootstrap
 
 STRATEGIES = ("donchian_20_10", "ema_20_50_cross", "ema_trend_pullback",
-              "mean_reversion_bollinger", "adaptive_regime_switch")
+              "mean_reversion_bollinger", "adaptive_regime_switch",
+              "donchian_long_regime", "donchian_long_regime_vol")
 DIRECTION_MODES = ("BOTH", "LONG", "SHORT")
 WINDOW_DAYS = 30
 OOS_WINDOWS = 8
@@ -831,9 +832,12 @@ def main():
     parser.add_argument("--max-markets", type=int, default=5)
     parser.add_argument("--out", default="walk-forward-results")
     parser.add_argument("--start-balance", type=float, default=5.0)
+    parser.add_argument("--end-timestamp", type=int, default=None,
+                        help="UTC Unix timestamp ending the dataset; use a disjoint historical holdout")
     args = parser.parse_args()
-    run_research(args.max_markets, args.days, output_dir=args.out,
-                 start_balance=args.start_balance, oos_windows=args.oos_windows)
+    run_research(args.max_markets, args.days, end_ts=args.end_timestamp,
+                 output_dir=args.out, start_balance=args.start_balance,
+                 oos_windows=args.oos_windows)
 
 
 if __name__ == "__main__":
