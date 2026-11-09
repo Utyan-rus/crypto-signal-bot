@@ -58,7 +58,7 @@ class PaperForwardCollectorTests(unittest.TestCase):
         self.assertEqual(rows[0]["status"], "provisional")
         self.assertIsNone(rows[0]["acceptable"])
 
-    def test_funding_coverage_accepts_complete_elapsed_window(self):
+    def test_partial_window_with_complete_observed_rows_remains_provisional(self):
         start = collector.OOS_START
         rates = {start + i * 3600: 0.0001 for i in range(3)}
         rows = collector.build_funding_coverage_rows("BTC", rates, start + 3 * 3600)
@@ -66,7 +66,9 @@ class PaperForwardCollectorTests(unittest.TestCase):
         self.assertEqual(rows[0]["funding_rows"], 3)
         self.assertEqual(rows[0]["expected_funding_hours"], 3)
         self.assertEqual(rows[0]["funding_coverage_pct"], 100.0)
-        self.assertTrue(rows[0]["acceptable"])
+        self.assertFalse(rows[0]["window_complete"])
+        self.assertEqual(rows[0]["status"], "provisional")
+        self.assertIsNone(rows[0]["acceptable"])
 
     def test_complete_window_with_one_missing_funding_row_passes_99_percent_gate(self):
         start = collector.OOS_START
