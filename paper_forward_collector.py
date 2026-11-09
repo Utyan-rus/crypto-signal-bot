@@ -55,13 +55,17 @@ def build_funding_coverage_rows(symbol, rates, end_ts):
         if window_end <= window_start:
             break
         coverage = funding_coverage(rates, window_start, window_end)
+        window_complete = window_end >= window_start + OOS_WINDOW_SECONDS
+        acceptable = funding_coverage_is_acceptable(coverage) if window_complete else None
         rows.append({
             "symbol": symbol,
             "window": f"oos_{index + 1}",
             "window_start_timestamp": window_start,
             "window_end_timestamp": window_end,
+            "window_complete": window_complete,
+            "status": ("pass" if acceptable else "fail") if window_complete else "provisional",
             **coverage,
-            "acceptable": funding_coverage_is_acceptable(coverage),
+            "acceptable": acceptable,
         })
         if window_end < window_start + OOS_WINDOW_SECONDS:
             break
@@ -292,14 +296,29 @@ def collect(output_dir, state_path):
         if end_ts > OOS_START + index * OOS_WINDOW_SECONDS
     )
     expected_coverage_rows = len(fixed_symbols) * elapsed_window_count
+    completed_window_count = sum(
+        1 for index in range(OOS_WINDOW_COUNT)
+        if end_ts >= OOS_START + (index + 1) * OOS_WINDOW_SECONDS
+    )
+    expected_completed_coverage_rows = len(fixed_symbols) * completed_window_count
+    completed_coverage_rows = [row for row in coverage_rows if row["window_complete"]]
+    completed_coverage_pass = (
+        completed_window_count > 0
+        and len(completed_coverage_rows) == expected_completed_coverage_rows
+        and all(row["acceptable"] is True for row in completed_coverage_rows)
+    )
     minimum_coverage = min(
         (row["funding_coverage_pct"] for row in coverage_rows),
         default=None,
     )
     funding_coverage_complete = (
-        expected_coverage_rows > 0
-        and len(coverage_rows) == expected_coverage_rows
-        and all(row["acceptable"] for row in coverage_rows)
+        completed_window_count == OOS_WINDOW_COUNT
+        and completed_coverage_pass
+    )
+    funding_coverage_status = (
+        "provisional" if completed_window_count < OOS_WINDOW_COUNT
+        else "pass" if funding_coverage_complete
+        else "fail"
     )
     (output_dir / "summary.json").write_text(json.dumps({
         "experiment_id": state["experiment_id"], "as_of_utc": state["last_run_utc"],
@@ -313,6 +332,10 @@ def collect(output_dir, state_path):
         "funding_coverage_expected_rows": expected_coverage_rows,
         "funding_coverage_reported_rows": len(coverage_rows),
         "funding_coverage_min_pct": minimum_coverage,
+        "funding_coverage_evaluated_windows": completed_window_count,
+        "funding_coverage_pending_windows": OOS_WINDOW_COUNT - completed_window_count,
+        "funding_coverage_completed_windows_pass": completed_coverage_pass,
+        "funding_coverage_status": funding_coverage_status,
         "funding_coverage_complete": funding_coverage_complete,
         "funding_coverage": coverage_rows,
         "take_profit_note": "3R is logged as a reference only; it is not an execution rule in the preregistered strategies.",
