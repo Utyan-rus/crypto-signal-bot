@@ -43,5 +43,43 @@ class PaperForwardCollectorTests(unittest.TestCase):
         self.assertEqual(collector.MAX_LEVERAGE, 3.0)
 
 
+    def test_funding_coverage_reports_missing_rows_without_open_positions(self):
+        track = collector.fresh_track()
+        self.assertIsNone(track["position"])
+        start = collector.OOS_START
+        rates = {start: 0.0001, start + 3600: 0.0001}
+        rows = collector.build_funding_coverage_rows("BTC", rates, start + 3 * 3600)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["expected_funding_hours"], 3)
+        self.assertEqual(rows[0]["funding_rows"], 2)
+        self.assertEqual(rows[0]["missing_funding_hours"], 1)
+        self.assertAlmostEqual(rows[0]["funding_coverage_pct"], 66.667, places=3)
+        self.assertFalse(rows[0]["acceptable"])
+
+    def test_funding_coverage_accepts_complete_elapsed_window(self):
+        start = collector.OOS_START
+        rates = {start + i * 3600: 0.0001 for i in range(3)}
+        rows = collector.build_funding_coverage_rows("BTC", rates, start + 3 * 3600)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["funding_rows"], 3)
+        self.assertEqual(rows[0]["expected_funding_hours"], 3)
+        self.assertEqual(rows[0]["funding_coverage_pct"], 100.0)
+        self.assertTrue(rows[0]["acceptable"])
+
+    def test_funding_coverage_reports_only_elapsed_windows(self):
+        end_ts = collector.OOS_START + collector.OOS_WINDOW_SECONDS + 2 * 3600
+        rows = collector.build_funding_coverage_rows("BTC", {}, end_ts)
+        self.assertEqual([row["window"] for row in rows], ["oos_1", "oos_2"])
+        self.assertEqual(rows[0]["expected_funding_hours"], 24 * 30)
+        self.assertEqual(rows[1]["expected_funding_hours"], 2)
+
+    def test_daily_trigger_path_does_not_loop_on_state_or_event_commits(self):
+        workflow = Path(".github/workflows/paper-forward-collector.yml").read_text(encoding="utf-8")
+        push_paths = workflow.split("  push:", 1)[1].split("  workflow_dispatch:", 1)[0]
+        self.assertIn("paper-forward-data/collector-trigger.json", push_paths)
+        self.assertNotIn("paper-forward-data/state.json", push_paths)
+        self.assertNotIn("paper-forward-data/events.jsonl", push_paths)
+
+
 if __name__ == "__main__":
     unittest.main()

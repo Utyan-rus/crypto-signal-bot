@@ -13,7 +13,12 @@ from pathlib import Path
 import funding_aware_research as funding
 import hourly_candidate_research as hourly
 from backtest import fetch_candles, get_markets
-from walk_forward_research import STRATEGIES, floor_to_hour
+from walk_forward_research import (
+    STRATEGIES,
+    floor_to_hour,
+    funding_coverage,
+    funding_coverage_is_acceptable,
+)
 
 CONFIG_PATH = Path("research/forward_holdout_2026-11-07.json")
 OOS_START = 1794034800
@@ -27,6 +32,8 @@ MAX_LEVERAGE = 3.0
 DIRECTION = "LONG"
 TIMEFRAME = "1h"
 STATE_VERSION = 1
+OOS_WINDOW_SECONDS = 30 * 24 * 3600
+OOS_WINDOW_COUNT = 4
 
 
 def fresh_track():
@@ -37,6 +44,28 @@ def fresh_track():
         "trades": 0, "wins": 0, "losses": 0, "gross_profit": 0.0,
         "gross_loss": 0.0, "signals_seen": 0, "min_notional_rejections": 0,
     }
+
+
+def build_funding_coverage_rows(symbol, rates, end_ts):
+    """Report exact hourly funding coverage for each elapsed preregistered OOS window."""
+    rows = []
+    for index in range(OOS_WINDOW_COUNT):
+        window_start = OOS_START + index * OOS_WINDOW_SECONDS
+        window_end = min(int(end_ts), window_start + OOS_WINDOW_SECONDS)
+        if window_end <= window_start:
+            break
+        coverage = funding_coverage(rates, window_start, window_end)
+        rows.append({
+            "symbol": symbol,
+            "window": f"oos_{index + 1}",
+            "window_start_timestamp": window_start,
+            "window_end_timestamp": window_end,
+            **coverage,
+            "acceptable": funding_coverage_is_acceptable(coverage),
+        })
+        if window_end < window_start + OOS_WINDOW_SECONDS:
+            break
+    return rows
 
 
 def load_state(path):
@@ -201,6 +230,7 @@ def collect(output_dir, state_path):
     if [base_symbol(m["symbol"]) for m in selected] != fixed_symbols:
         raise RuntimeError("Preregistered five-market universe is incomplete; collector failed closed")
     failures = []
+    coverage_rows = []
     for market in selected:
         symbol = market["symbol"]
         key = base_symbol(symbol)
@@ -215,7 +245,9 @@ def collect(output_dir, state_path):
                 raise RuntimeError(f"hourly candle history has {len(gaps)} timestamp gaps; first={gaps[0]}")
             tracks_for_market = [f"{key}|{name}" for name in STRATEGIES]
             earliest = min(int(state["tracks"].get(k, fresh_track())["last_bar_ts"]) for k in tracks_for_market)
-            rates = funding.fetch_funding_rates(market["id"], max(OOS_START, earliest), end_ts)
+            # Fetch the full OOS interval so coverage is auditable even when no position is open.
+            rates = funding.fetch_funding_rates(market["id"], OOS_START, end_ts)
+            coverage_rows.extend(build_funding_coverage_rows(key, rates, end_ts))
             for strategy in STRATEGIES:
                 track_key = f"{key}|{strategy}"
                 track = state["tracks"].setdefault(track_key, fresh_track())
@@ -255,6 +287,20 @@ def collect(output_dir, state_path):
             "funding_missing_hours": track["funding_missing_hours"],
             "open_position": track["position"], "signals_seen": track["signals_seen"],
             "min_notional_rejections": track["min_notional_rejections"]})
+    elapsed_window_count = sum(
+        1 for index in range(OOS_WINDOW_COUNT)
+        if end_ts > OOS_START + index * OOS_WINDOW_SECONDS
+    )
+    expected_coverage_rows = len(fixed_symbols) * elapsed_window_count
+    minimum_coverage = min(
+        (row["funding_coverage_pct"] for row in coverage_rows),
+        default=None,
+    )
+    funding_coverage_complete = (
+        expected_coverage_rows > 0
+        and len(coverage_rows) == expected_coverage_rows
+        and all(row["acceptable"] for row in coverage_rows)
+    )
     (output_dir / "summary.json").write_text(json.dumps({
         "experiment_id": state["experiment_id"], "as_of_utc": state["last_run_utc"],
         "oos_start_utc": "2026-11-07T07:00:00Z", "fixed_universe": fixed_symbols,
@@ -263,6 +309,12 @@ def collect(output_dir, state_path):
         "max_leverage": MAX_LEVERAGE, "min_notional_usd": MIN_NOTIONAL,
         "fee_per_side": FEE, "slippage_per_side": SLIPPAGE,
         "funding_missing_means_pnl_is_incomplete": True,
+        "funding_coverage_threshold_pct": 99.0,
+        "funding_coverage_expected_rows": expected_coverage_rows,
+        "funding_coverage_reported_rows": len(coverage_rows),
+        "funding_coverage_min_pct": minimum_coverage,
+        "funding_coverage_complete": funding_coverage_complete,
+        "funding_coverage": coverage_rows,
         "take_profit_note": "3R is logged as a reference only; it is not an execution rule in the preregistered strategies.",
         "real_orders_enabled": False, "failures": failures, "tracks": summary,
     }, ensure_ascii=False, indent=2), encoding="utf-8")

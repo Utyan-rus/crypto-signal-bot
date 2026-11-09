@@ -2,7 +2,8 @@ name: Independent hourly paper-forward collector
 
 on:
   # GitHub scheduled workflows run only from the default branch.
-  # This research-branch schedule remains dormant until explicitly merged to main.
+  # Keep this branch isolated; daily research automation updates a marker to request a catch-up run.
+  # State and event journal paths are deliberately excluded to prevent self-trigger loops.
   schedule:
     - cron: "17 * * * *"
   push:
@@ -11,6 +12,7 @@ on:
       - "paper_forward_collector.py"
       - "tests/test_paper_forward_collector.py"
       - ".github/workflows/paper-forward-collector.yml"
+      - "paper-forward-data/collector-trigger.json"
   workflow_dispatch:
 
 permissions:
