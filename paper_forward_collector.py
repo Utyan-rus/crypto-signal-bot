@@ -18,6 +18,7 @@ from walk_forward_research import (
     floor_to_hour,
     funding_coverage,
     funding_coverage_is_acceptable,
+    buy_hold_baseline,
 )
 
 CONFIG_PATH = Path("research/forward_holdout_2026-11-07.json")
@@ -70,6 +71,211 @@ def build_funding_coverage_rows(symbol, rates, end_ts):
         if window_end < window_start + OOS_WINDOW_SECONDS:
             break
     return rows
+
+
+def build_prospective_benchmark_rows(symbol, candles, rates, end_ts, start_balance=START_BALANCE):
+    """Build matched cash and costed 1x long/short baselines for fixed OOS windows."""
+    end_ts = int(end_ts)
+    windows = []
+    for index in range(OOS_WINDOW_COUNT):
+        window_start = OOS_START + index * OOS_WINDOW_SECONDS
+        if end_ts <= window_start:
+            continue
+        window_end = min(end_ts, window_start + OOS_WINDOW_SECONDS)
+        windows.append((
+            f"oos_{index + 1}", window_start, window_end,
+            window_end >= window_start + OOS_WINDOW_SECONDS, False,
+        ))
+    if end_ts > OOS_START:
+        windows.append((
+            "oos_to_date", OOS_START, end_ts,
+            end_ts >= OOS_START + OOS_WINDOW_SECONDS * OOS_WINDOW_COUNT, True,
+        ))
+
+    rows = []
+    market_coverage = build_funding_coverage_rows(symbol, rates, end_ts)
+    completed_coverage = [row for row in market_coverage if row["window_complete"]]
+    all_windows_coverage_pass = (
+        len(completed_coverage) == OOS_WINDOW_COUNT
+        and all(row["acceptable"] is True for row in completed_coverage)
+    )
+
+    for label, window_start, window_end, window_complete, cumulative in windows:
+        bars = [
+            bar for bar in candles
+            if window_start <= int(bar["t"]) < window_end
+        ]
+        coverage = funding_coverage(rates, window_start, window_end)
+        coverage_gate_pass = (
+            all_windows_coverage_pass if cumulative
+            else funding_coverage_is_acceptable(coverage)
+        )
+        cash_status = "pass" if window_complete and bars else (
+            "provisional" if bars else "insufficient_window_data"
+        )
+        rows.append({
+            "symbol": symbol,
+            "window": label,
+            "benchmark": "cash_no_trade",
+            "window_start_timestamp": window_start,
+            "window_end_timestamp": window_end,
+            "window_complete": window_complete,
+            "start_balance_usd": float(start_balance),
+            "return_pct": 0.0 if bars else None,
+            "observed_return_excluding_missing_funding_pct": 0.0 if bars else None,
+            "end_balance_usd": float(start_balance) if bars else None,
+            "observed_end_balance_excluding_missing_funding_usd": float(start_balance) if bars else None,
+            "funding_complete": True,
+            "funding_missing_hours": 0,
+            "funding_expected_hours_after_entry": 0,
+            "funding_events_charged": 0,
+            "funding_net_cost_usd": 0.0,
+            "funding_net_cost_known_usd": 0.0,
+            "funding_coverage_pct": coverage["funding_coverage_pct"],
+            "funding_coverage_missing_hours": coverage["missing_funding_hours"],
+            "unexpected_funding_rows": coverage["unexpected_funding_rows"],
+            "coverage_gate_pass": coverage_gate_pass,
+            "executable": bool(bars),
+            "decision_eligible": bool(window_complete and bars),
+            "status": cash_status,
+        })
+
+        for direction in ("LONG", "SHORT"):
+            baseline = buy_hold_baseline(
+                candles, window_start, window_end, float(start_balance),
+                FEE, SLIPPAGE, MIN_NOTIONAL, funding=rates, direction=direction,
+            )
+            entry_time = int(bars[0]["t"]) if bars else None
+            expected_funding_times = {
+                int(bar["t"]) for bar in bars
+                if entry_time is not None and int(bar["t"]) > entry_time
+            }
+            observed_funding_times = {int(timestamp) for timestamp in rates}
+            missing_funding_times = expected_funding_times - observed_funding_times
+            funding_complete = not missing_funding_times
+            executable = bool(baseline.get("executable"))
+            observed_return = baseline.get("return_pct")
+            net_return = observed_return if funding_complete and executable else None
+
+            if not executable:
+                status = baseline.get("status", "not_executable")
+            elif not funding_complete:
+                status = (
+                    "funding_pnl_incomplete" if window_complete
+                    else "provisional_funding_pnl_incomplete"
+                )
+            elif not window_complete:
+                status = "provisional"
+            elif not coverage_gate_pass:
+                status = "funding_coverage_fail"
+            else:
+                status = "pass"
+
+            rows.append({
+                "symbol": symbol,
+                "window": label,
+                "benchmark": f"1x_{direction.lower()}_hold",
+                "window_start_timestamp": window_start,
+                "window_end_timestamp": window_end,
+                "window_complete": window_complete,
+                "start_balance_usd": float(start_balance),
+                "return_pct": net_return,
+                "observed_return_excluding_missing_funding_pct": observed_return,
+                "end_balance_usd": (
+                    round(float(start_balance) * (1.0 + net_return / 100.0), 8)
+                    if net_return is not None else None
+                ),
+                "observed_end_balance_excluding_missing_funding_usd": (
+                    round(float(start_balance) * (1.0 + observed_return / 100.0), 8)
+                    if observed_return is not None and executable else None
+                ),
+                "funding_complete": funding_complete,
+                "funding_missing_hours": len(missing_funding_times),
+                "funding_expected_hours_after_entry": len(expected_funding_times),
+                "funding_events_charged": baseline.get("funding_events_charged", 0),
+                "funding_net_cost_usd": (
+                    baseline.get("funding_net_cost_usd") if funding_complete else None
+                ),
+                "funding_net_cost_known_usd": baseline.get("funding_net_cost_usd", 0.0),
+                "funding_coverage_pct": coverage["funding_coverage_pct"],
+                "funding_coverage_missing_hours": coverage["missing_funding_hours"],
+                "unexpected_funding_rows": coverage["unexpected_funding_rows"],
+                "coverage_gate_pass": coverage_gate_pass,
+                "fee_per_side": FEE,
+                "slippage_per_side": SLIPPAGE,
+                "min_notional_usd": MIN_NOTIONAL,
+                "executable": executable,
+                "decision_eligible": bool(
+                    executable and window_complete and coverage_gate_pass and funding_complete
+                ),
+                "status": status,
+            })
+    return rows
+
+
+def build_paired_benchmark_comparisons(track_rows, benchmark_rows):
+    """Pair each strategy's OOS-to-date MTM return with the same market/balance window."""
+    lookup = {
+        (row["symbol"], row["benchmark"]): row
+        for row in benchmark_rows
+        if row["window"] == "oos_to_date"
+    }
+    comparisons = []
+    for track in track_rows:
+        symbol, strategy = track["market_strategy"].split("|", 1)
+        observed_strategy_return = (
+            100.0 * (float(track["mtm_equity_usd"]) / START_BALANCE - 1.0)
+        )
+        strategy_funding_complete = int(track.get("funding_missing_hours", 0)) == 0
+        strategy_return = observed_strategy_return if strategy_funding_complete else None
+        for benchmark_name in ("cash_no_trade", "1x_long_hold", "1x_short_hold"):
+            benchmark = lookup.get((symbol, benchmark_name))
+            if benchmark is None:
+                continue
+            benchmark_return = benchmark.get("return_pct")
+            observed_benchmark_return = benchmark.get(
+                "observed_return_excluding_missing_funding_pct"
+            )
+            excess = (
+                strategy_return - benchmark_return
+                if strategy_return is not None and benchmark_return is not None
+                else None
+            )
+            observed_excess = (
+                observed_strategy_return - observed_benchmark_return
+                if observed_benchmark_return is not None else None
+            )
+            eligible = bool(
+                strategy_funding_complete and benchmark.get("decision_eligible", False)
+            )
+            comparisons.append({
+                "symbol": symbol,
+                "strategy": strategy,
+                "market_strategy": track["market_strategy"],
+                "window": "oos_to_date",
+                "start_balance_usd": START_BALANCE,
+                "strategy_return_pct": strategy_return,
+                "observed_strategy_return_excluding_missing_funding_pct": round(
+                    observed_strategy_return, 8
+                ),
+                "strategy_funding_complete": strategy_funding_complete,
+                "benchmark": benchmark_name,
+                "benchmark_return_pct": benchmark_return,
+                "observed_benchmark_return_excluding_missing_funding_pct": observed_benchmark_return,
+                "excess_return_pp": round(excess, 8) if excess is not None else None,
+                "observed_excess_excluding_missing_funding_pp": (
+                    round(observed_excess, 8) if observed_excess is not None else None
+                ),
+                "benchmark_funding_complete": benchmark.get("funding_complete", True),
+                "benchmark_funding_missing_hours": benchmark.get("funding_missing_hours", 0),
+                "decision_eligible": eligible,
+                "status": (
+                    "pass" if eligible
+                    else "strategy_funding_incomplete" if not strategy_funding_complete
+                    else benchmark.get("status", "provisional")
+                ),
+            })
+    return comparisons
 
 
 def load_state(path):
@@ -235,6 +441,7 @@ def collect(output_dir, state_path):
         raise RuntimeError("Preregistered five-market universe is incomplete; collector failed closed")
     failures = []
     coverage_rows = []
+    benchmark_rows = []
     for market in selected:
         symbol = market["symbol"]
         key = base_symbol(symbol)
@@ -251,7 +458,11 @@ def collect(output_dir, state_path):
             earliest = min(int(state["tracks"].get(k, fresh_track())["last_bar_ts"]) for k in tracks_for_market)
             # Fetch the full OOS interval so coverage is auditable even when no position is open.
             rates = funding.fetch_funding_rates(market["id"], OOS_START, end_ts)
-            coverage_rows.extend(build_funding_coverage_rows(key, rates, end_ts))
+            market_coverage_rows = build_funding_coverage_rows(key, rates, end_ts)
+            coverage_rows.extend(market_coverage_rows)
+            benchmark_rows.extend(
+                build_prospective_benchmark_rows(key, candles, rates, end_ts)
+            )
             for strategy in STRATEGIES:
                 track_key = f"{key}|{strategy}"
                 track = state["tracks"].setdefault(track_key, fresh_track())
@@ -291,6 +502,9 @@ def collect(output_dir, state_path):
             "funding_missing_hours": track["funding_missing_hours"],
             "open_position": track["position"], "signals_seen": track["signals_seen"],
             "min_notional_rejections": track["min_notional_rejections"]})
+    paired_benchmark_comparisons = build_paired_benchmark_comparisons(
+        summary, benchmark_rows
+    )
     elapsed_window_count = sum(
         1 for index in range(OOS_WINDOW_COUNT)
         if end_ts > OOS_START + index * OOS_WINDOW_SECONDS
@@ -338,6 +552,8 @@ def collect(output_dir, state_path):
         "funding_coverage_status": funding_coverage_status,
         "funding_coverage_complete": funding_coverage_complete,
         "funding_coverage": coverage_rows,
+        "benchmarks": benchmark_rows,
+        "paired_benchmark_comparisons": paired_benchmark_comparisons,
         "take_profit_note": "3R is logged as a reference only; it is not an execution rule in the preregistered strategies.",
         "real_orders_enabled": False, "failures": failures, "tracks": summary,
     }, ensure_ascii=False, indent=2), encoding="utf-8")

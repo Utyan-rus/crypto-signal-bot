@@ -118,5 +118,98 @@ class PaperForwardCollectorTests(unittest.TestCase):
         self.assertNotIn("paper-forward-data/events.jsonl", push_paths)
 
 
+    def test_prospective_benchmarks_include_cash_and_both_1x_directions(self):
+        start = collector.OOS_START
+        candles = [
+            {"t": start + i * 3600, "o": 100.0 + i, "h": 102.0 + i,
+             "l": 99.0 + i, "c": 101.0 + i}
+            for i in range(4)
+        ]
+        rates = {start + i * 3600: 0.0001 for i in range(4)}
+        rows = collector.build_prospective_benchmark_rows(
+            "BTC", candles, rates, start + 4 * 3600
+        )
+        by_key = {(row["window"], row["benchmark"]): row for row in rows}
+        self.assertEqual(len(rows), 6)
+        self.assertEqual(by_key[("oos_to_date", "cash_no_trade")]["return_pct"], 0.0)
+        long_row = by_key[("oos_to_date", "1x_long_hold")]
+        short_row = by_key[("oos_to_date", "1x_short_hold")]
+        self.assertTrue(long_row["funding_complete"])
+        self.assertTrue(short_row["funding_complete"])
+        self.assertGreater(long_row["funding_net_cost_usd"], 0.0)
+        self.assertLess(short_row["funding_net_cost_usd"], 0.0)
+        self.assertIsNotNone(long_row["return_pct"])
+        self.assertFalse(long_row["decision_eligible"])
+        self.assertEqual(long_row["status"], "provisional")
+
+    def test_missing_charged_funding_hides_net_buy_hold_return(self):
+        start = collector.OOS_START
+        candles = [
+            {"t": start + i * 3600, "o": 100.0 + i, "h": 102.0 + i,
+             "l": 99.0 + i, "c": 101.0 + i}
+            for i in range(4)
+        ]
+        rates = {
+            start: 0.0001,
+            start + 3600: 0.0001,
+            start + 3 * 3600: 0.0001,
+        }
+        rows = collector.build_prospective_benchmark_rows(
+            "BTC", candles, rates, start + 4 * 3600
+        )
+        by_key = {(row["window"], row["benchmark"]): row for row in rows}
+        long_row = by_key[("oos_to_date", "1x_long_hold")]
+        self.assertFalse(long_row["funding_complete"])
+        self.assertEqual(long_row["funding_missing_hours"], 1)
+        self.assertIsNone(long_row["return_pct"])
+        self.assertIsNotNone(long_row["observed_return_excluding_missing_funding_pct"])
+        self.assertEqual(long_row["status"], "provisional_funding_pnl_incomplete")
+        self.assertEqual(by_key[("oos_to_date", "cash_no_trade")]["return_pct"], 0.0)
+
+    def test_prospective_buy_hold_respects_minimum_notional(self):
+        start = collector.OOS_START
+        candles = [
+            {"t": start + i * 3600, "o": 100.0 + i, "h": 102.0 + i,
+             "l": 99.0 + i, "c": 101.0 + i}
+            for i in range(4)
+        ]
+        rates = {start + i * 3600: 0.0001 for i in range(4)}
+        rows = collector.build_prospective_benchmark_rows(
+            "BTC", candles, rates, start + 4 * 3600, start_balance=5.0
+        )
+        long_row = next(
+            row for row in rows
+            if row["window"] == "oos_to_date" and row["benchmark"] == "1x_long_hold"
+        )
+        self.assertFalse(long_row["executable"])
+        self.assertEqual(long_row["status"], "not_executable_below_min_notional")
+        self.assertIsNone(long_row["return_pct"])
+
+    def test_paired_comparison_uses_same_oos_to_date_balance_and_boundary(self):
+        start = collector.OOS_START
+        candles = [
+            {"t": start + i * 3600, "o": 100.0 + i, "h": 102.0 + i,
+             "l": 99.0 + i, "c": 101.0 + i}
+            for i in range(4)
+        ]
+        rates = {start + i * 3600: 0.0001 for i in range(4)}
+        benchmarks = collector.build_prospective_benchmark_rows(
+            "BTC", candles, rates, start + 4 * 3600
+        )
+        tracks = [{
+            "market_strategy": "BTC|donchian_long_regime",
+            "mtm_equity_usd": 50.0,
+            "funding_missing_hours": 0,
+        }]
+        comparisons = collector.build_paired_benchmark_comparisons(tracks, benchmarks)
+        cash = next(row for row in comparisons if row["benchmark"] == "cash_no_trade")
+        self.assertEqual(cash["strategy_return_pct"], 0.0)
+        self.assertEqual(cash["benchmark_return_pct"], 0.0)
+        self.assertEqual(cash["excess_return_pp"], 0.0)
+        self.assertEqual(cash["start_balance_usd"], 50.0)
+        self.assertFalse(cash["decision_eligible"])
+        self.assertEqual(cash["window"], "oos_to_date")
+
+
 if __name__ == "__main__":
     unittest.main()
