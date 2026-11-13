@@ -1,5 +1,5 @@
 {
   "purpose": "Daily push trigger for the read-only prospective paper-forward collector; the collector backfills every newly closed hourly bar since its checkpoint.",
-  "requested_at_utc": "2026-11-12T07:51:11Z",
-  "sequence": 4
+  "requested_at_utc": "2026-11-13T07:18:38Z",
+  "sequence": 5
 }
