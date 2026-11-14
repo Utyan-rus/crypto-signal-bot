@@ -1,0 +1,89 @@
+name: Prospective 245-day fixed-parameter strategy validation
+
+on:
+  pull_request:
+    types: [opened, reopened]
+    paths:
+      - "walk_forward_research.py"
+      - "hourly_candidate_research.py"
+      - "tests/test_walk_forward_research.py"
+      - "tests/test_forward_holdout_preregistration.py"
+      - "research/forward_holdout_2026-11-07.json"
+      - ".github/workflows/walk-forward-research.yml"
+  push:
+    branches: ["research/robust-backtest-audit"]
+    paths:
+      - "walk_forward_research.py"
+      - "hourly_candidate_research.py"
+      - "tests/test_walk_forward_research.py"
+      - "tests/test_hourly_candidate_research.py"
+      - "tests/test_forward_holdout_preregistration.py"
+      - "research/forward_holdout_2026-11-07.json"
+  workflow_dispatch:
+    inputs:
+      start_balance:
+        description: "Diagnostic starting balance in USD (paper only)"
+        required: true
+        default: "50"
+        type: choice
+        options: ["5", "50", "100"]
+      max_markets:
+        description: "Markets to test"
+        required: true
+        default: "5"
+        type: choice
+        options: ["5"]
+      end_timestamp:
+        description: "UTC end timestamp for the preregistered prospective holdout"
+        required: true
+        default: "1804402800"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  walk-forward:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt
+      - name: Run unit tests
+        run: |
+          python -m unittest discover -s tests -p 'test_walk_forward_research.py' -v
+          python -m unittest discover -s tests -p 'test_forward_holdout_preregistration.py' -v
+      - name: Gate prospective OOS until all data exists
+        id: holdout_gate
+        env:
+          END_TS: "${{ inputs.end_timestamp || '1804402800' }}"
+        run: |
+          NOW_TS=$(date -u +%s)
+          if ! [[ "$END_TS" =~ ^[0-9]+$ ]]; then
+            echo "END_TS must be a Unix timestamp" >&2
+            exit 1
+          fi
+          if (( NOW_TS < END_TS )); then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Holdout ends at $END_TS; current time is $NOW_TS. Skipping backtest."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "Holdout is complete; research may run."
+          fi
+      - name: Compare seven fixed strategies on the preregistered 120-day OOS holdout
+        if: steps.holdout_gate.outputs.ready == 'true'
+        run: python walk_forward_research.py --days 245 --oos-windows 4 --max-markets "${{ inputs.max_markets || '5' }}" --start-balance "${{ inputs.start_balance || '50' }}" --end-timestamp "${{ inputs.end_timestamp || '1804402800' }}" --out walk-forward-results
+      - name: Wait for prospective OOS data
+        if: steps.holdout_gate.outputs.ready != 'true'
+        run: echo "No backtest was run; the preregistered OOS end is still in the future."
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lighter-hourly-walk-forward
+          path: walk-forward-results/
+          if-no-files-found: warn
+          retention-days: 30

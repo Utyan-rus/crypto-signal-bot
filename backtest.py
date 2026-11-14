@@ -91,7 +91,9 @@ def get_markets():
 
 def fetch_candles(market_id, resolution, start_ts, end_ts):
     # API supports up to 500 candles per call; request non-overlapping chunks.
-    step = 300 if resolution == "5m" else 900
+    step = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}.get(resolution)
+    if step is None:
+        raise ValueError(f"Unsupported candle resolution: {resolution}")
     out = {}
     cursor = start_ts
     while cursor < end_ts:
@@ -109,7 +111,6 @@ def fetch_candles(market_id, resolution, start_ts, end_ts):
                 candle = {"t": ts, "o": float(field(row, "open", "o")),
                           "h": float(field(row, "high", "h")), "l": float(field(row, "low", "l")),
                           "c": float(field(row, "close", "c")), "v": float(field(row, "volume", "v", default=0))}
-                step = 300 if resolution == "5m" else 900
                 if start_ts <= ts and ts + step <= end_ts:
                     out[ts] = candle
             except (TypeError, ValueError):
