@@ -80,11 +80,11 @@ class ProspectiveHoldoutPreregistrationTests(unittest.TestCase):
 
 
     def test_final_oos_trigger_is_separate_and_cannot_run_before_oos_end(self):
-        push_section = self.workflow.split("\n  push:\\n", 1)[1].split(
-            "\\n  workflow_dispatch:", 1
+        push_section = self.workflow.split("  push:", 1)[1].split(
+            "  workflow_dispatch:", 1
         )[0]
-        pull_request_section = self.workflow.split("\\n  pull_request:\\n", 1)[1].split(
-            "\\n  push:\\n", 1
+        pull_request_section = self.workflow.split("  pull_request:", 1)[1].split(
+            "  push:", 1
         )[0]
         self.assertIn('"paper-forward-data/walk-forward-trigger.json"', push_section)
         self.assertNotIn('"paper-forward-data/collector-trigger.json"', push_section)
