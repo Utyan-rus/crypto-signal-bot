@@ -19,6 +19,7 @@ on:
       - "tests/test_hourly_candidate_research.py"
       - "tests/test_forward_holdout_preregistration.py"
       - "research/forward_holdout_2026-11-07.json"
+      - "paper-forward-data/walk-forward-trigger.json"
   workflow_dispatch:
     inputs:
       start_balance:

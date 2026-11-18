@@ -78,6 +78,32 @@ class ProspectiveHoldoutPreregistrationTests(unittest.TestCase):
         self.assertTrue(self.config["paper_only"])
         self.assertFalse(self.config["real_orders_enabled"])
 
+
+    def test_final_oos_trigger_is_separate_and_cannot_run_before_oos_end(self):
+        push_section = self.workflow.split("\\n  push:\\n", 1)[1].split(
+            "\\n  workflow_dispatch:", 1
+        )[0]
+        pull_request_section = self.workflow.split("\\n  pull_request:\\n", 1)[1].split(
+            "\\n  push:\\n", 1
+        )[0]
+        self.assertIn('"paper-forward-data/walk-forward-trigger.json"', push_section)
+        self.assertNotIn('"paper-forward-data/collector-trigger.json"', push_section)
+        self.assertNotIn('"paper-forward-data/walk-forward-trigger.json"', pull_request_section)
+
+        trigger = json.loads(
+            (ROOT / "paper-forward-data" / "walk-forward-trigger.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(trigger["oos_end_utc"], self.config["data_window"]["oos_end_utc"])
+        if trigger["requested_at_utc"] is None:
+            self.assertEqual(trigger["sequence"], 0)
+        else:
+            self.assertGreater(trigger["sequence"], 0)
+            self.assertGreaterEqual(
+                trigger["requested_at_utc"], self.config["data_window"]["oos_end_utc"]
+            )
+
     def test_workflow_cannot_start_backtest_before_preregistered_end(self):
         self.assertIn('default: "1804402800"', self.workflow)
         self.assertIn("id: holdout_gate", self.workflow)
