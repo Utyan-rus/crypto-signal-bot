@@ -1,0 +1,225 @@
+{
+  "experiment_id": "prospective-120d-holdout-2026-11-07",
+  "status": "preregistered_waiting_for_oos_end",
+  "registered_at_utc": "2026-11-07T07:40:42Z",
+  "registered_on_head": "2a72a494b1c0a3a58d462ec615dd78be2b496226",
+  "purpose": "Forward-time paper replication of the fixed seven-strategy hourly research set; no parameter search or side selection on this holdout.",
+  "data_window": {
+    "warmup_start_utc": "2026-07-05T07:00:00Z",
+    "warmup_start_timestamp": 1783234800,
+    "oos_start_utc": "2026-11-07T07:00:00Z",
+    "oos_start_timestamp": 1794034800,
+    "oos_end_utc": "2027-03-07T07:00:00Z",
+    "oos_end_timestamp": 1804402800,
+    "warmup_days": 125,
+    "oos_window_count": 4,
+    "oos_window_days": 30,
+    "oos_days": 120,
+    "total_context_days": 245,
+    "previous_research_data_end_utc": "2026-11-06T01:50:02Z",
+    "previous_research_data_end_timestamp": 1793929802,
+    "disjoint_rule": "OOS starts strictly after the last previously inspected research dataset end. Warmup may overlap older candle history only for indicator initialization; no warmup PnL or selection."
+  },
+  "universe": {
+    "max_markets": 5,
+    "ordered_symbols": [
+      "BTC",
+      "ETH",
+      "SOL",
+      "BNB",
+      "XRP"
+    ],
+    "selection_rule": "First five from fixed RESEARCH_SYMBOLS; no OOS-based selection."
+  },
+  "strategy_set": [
+    {
+      "name": "donchian_20_10",
+      "role": "reference_only"
+    },
+    {
+      "name": "ema_20_50_cross",
+      "role": "reference_only"
+    },
+    {
+      "name": "ema_trend_pullback",
+      "role": "reference_only"
+    },
+    {
+      "name": "mean_reversion_bollinger",
+      "role": "reference_only"
+    },
+    {
+      "name": "adaptive_regime_switch",
+      "role": "reference_only"
+    },
+    {
+      "name": "donchian_long_regime",
+      "role": "primary"
+    },
+    {
+      "name": "donchian_long_regime_vol",
+      "role": "secondary_diagnostic_only"
+    }
+  ],
+  "primary_strategy": "donchian_long_regime",
+  "secondary_strategy": "donchian_long_regime_vol",
+  "selection_rationale": "Primary is the simpler long-only breakout regime filter with fewer gates, chosen for parsimony rather than prior OOS return. The volatility-gated variant is diagnostic only and cannot replace the primary based on this holdout.",
+  "fixed_strategy_definitions": {
+    "donchian_long_regime": {
+      "direction": "LONG only",
+      "entry": "Closed hourly close above prior 20-bar high, close above EMA200, EMA200[t] >= EMA200[t-24] * 1.001.",
+      "stop_distance": "max(2.5 * ATR14, 0.003 * close)",
+      "exit": "Closed hourly close below prior 10-bar low; existing stop-first execution remains unchanged."
+    },
+    "donchian_long_regime_vol": {
+      "inherits": "donchian_long_regime",
+      "additional_filters": [
+        "ATR14 <= 1.25 * ATR100",
+        "ATR14 / close <= 0.03"
+      ]
+    }
+  },
+  "direction_modes": [
+    "BOTH",
+    "LONG",
+    "SHORT"
+  ],
+  "primary_direction": "LONG",
+  "capital_and_execution": {
+    "diagnostic_start_balance_usd": 50,
+    "risk_fraction": 0.005,
+    "max_leverage": 3,
+    "minimum_quote_notional_usd": 10,
+    "minimum_quote_notional_source": "Lighter /api/v1/orderBookDetails?filter=perp; audit run 41996088346 (2026-11-05), 242 markets; all ten predeclared majors had min_quote_amount=10.000000. Refresh before execution.",
+    "five_usd_feasibility": {
+      "balance_usd": 5,
+      "maximum_risk_sized_notional_usd": 8.333333,
+      "maximum_leverage_notional_usd": 15,
+      "maximum_allowed_notional_usd": 8.333333,
+      "minimum_quote_notional_usd": 10,
+      "minimum_notional_reachable": false,
+      "minimum_balance_at_minimum_stop_usd": 6
+    },
+    "sizing_rule": "Never enlarge risk to meet minimum notional; reject non-executable entries and count every rejection."
+  },
+  "cost_scenarios": [
+    {
+      "name": "zero_fee_base_slippage",
+      "fee_per_side": 0,
+      "slippage_per_side": 0.0005
+    },
+    {
+      "name": "assumed_taker_base_slippage",
+      "fee_per_side": 0.0005,
+      "slippage_per_side": 0.0005
+    },
+    {
+      "name": "assumed_taker_double_slippage",
+      "fee_per_side": 0.0005,
+      "slippage_per_side": 0.001
+    },
+    {
+      "name": "double_fee_double_slippage",
+      "fee_per_side": 0.001,
+      "slippage_per_side": 0.001
+    }
+  ],
+  "funding": {
+    "source": "Lighter /api/v1/fundings?resolution=1h",
+    "signed_rate_rule": "Positive rate with direction=long means longs pay; direction=short is sign-inverted. Negative rates reverse the payer.",
+    "settlement_mark_assumption": "Apply matching hourly signed rate at that candle timestamp using candle close; disclose as an assumption.",
+    "minimum_coverage_pct_per_market_window": 99,
+    "unexpected_funding_rows_allowed": 0,
+    "fail_closed_on_coverage_failure": true
+  },
+  "benchmarks": [
+    "cash_no_trade",
+    "1x_long_hold",
+    "1x_short_hold"
+  ],
+  "bootstrap": {
+    "method": "two_way_market_resampling_plus_contiguous_window_blocks",
+    "replicates": 10000,
+    "contiguous_window_block_length": 2,
+    "seed": 20261103,
+    "confidence_interval": "two-sided 95%"
+  },
+  "primary_promotion_criteria": {
+    "strategy": "donchian_long_regime",
+    "direction": "LONG",
+    "base_cost_scenario": "assumed_taker_base_slippage",
+    "require_two_way_ci95_lower_mean_return_pct_greater_than": 0,
+    "require_two_way_ci95_lower_mean_excess_vs_1x_long_hold_pp_greater_than": 0,
+    "stress_cost_scenario": "double_fee_double_slippage",
+    "require_stress_mean_return_point_estimate_greater_than": 0,
+    "require_complete_20_market_window_grid": true,
+    "require_zero_data_errors": true,
+    "require_funding_coverage_at_least_99_percent_in_every_market_window": true,
+    "require_zero_unexpected_funding_rows": true,
+    "require_minimum_notional_and_risk_caps_respected": true,
+    "if_any_gate_fails": "Do not promote or tune against this holdout. Do not select the secondary strategy. Register a new independent period before another confirmatory test."
+  },
+  "required_report_fields": [
+    "mean_and_median_return",
+    "positive_market_window_fraction",
+    "MTM_drawdown",
+    "profit_factor",
+    "trade_count",
+    "tested_low_sample_no_trade_counts",
+    "minimum_notional_rejections",
+    "funding_coverage_and_signed_funding_cost",
+    "cash_and_buy_hold_excess",
+    "two_way_bootstrap_intervals",
+    "leave_one_market_out_concentration",
+    "API_and_data_errors"
+  ],
+  "prior_diagnostic_on_2025_oos": {
+    "oos_end_utc": "2025-10-02T01:00:00Z",
+    "base_cost_scenario": "assumed_taker_base_slippage",
+    "primary": {
+      "mean_return_pct": 0.7561,
+      "median_return_pct": -0.502,
+      "positive_market_window_fraction_pct": 35,
+      "mean_mtm_drawdown_pct": 2.077,
+      "mean_profit_factor": 2.7112,
+      "trades": 116,
+      "tested_market_windows": 13,
+      "low_sample_market_windows": 7,
+      "min_notional_rejections": 45,
+      "mean_excess_vs_long_buy_hold_pp": -7.2474,
+      "two_way_mean_return_ci95_pct": [
+        -0.5303,
+        2.727
+      ],
+      "two_way_excess_vs_long_buy_hold_ci95_pp": [
+        -14.1022,
+        -3.1527
+      ],
+      "funding_coverage_pct": 99.861
+    },
+    "secondary": {
+      "mean_return_pct": 0.8222,
+      "median_return_pct": -0.3935,
+      "positive_market_window_fraction_pct": 40,
+      "mean_mtm_drawdown_pct": 2.0186,
+      "mean_profit_factor": 2.9912,
+      "trades": 110,
+      "tested_market_windows": 12,
+      "low_sample_market_windows": 8,
+      "min_notional_rejections": 19,
+      "mean_excess_vs_long_buy_hold_pp": -7.1814,
+      "two_way_mean_return_ci95_pct": [
+        -0.4786,
+        2.8478
+      ],
+      "two_way_excess_vs_long_buy_hold_ci95_pp": [
+        -13.9735,
+        -2.9225
+      ],
+      "funding_coverage_pct": 99.861
+    }
+  },
+  "paper_only": true,
+  "real_orders_enabled": false,
+  "run_rule": "Do not execute until the fixed OOS end timestamp has passed and the last hourly candle is fully closed."
+}

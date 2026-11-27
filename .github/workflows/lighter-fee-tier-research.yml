@@ -1,0 +1,47 @@
+name: Lighter fee-tier sensitivity paper research
+
+on:
+  pull_request:
+    types: [opened, reopened]
+    paths:
+      - "lighter_fee_tier_research.py"
+      - "tests/test_lighter_fee_tier_research.py"
+      - ".github/workflows/lighter-fee-tier-research.yml"
+  push:
+    branches: ["research/robust-backtest-audit"]
+    paths:
+      - "lighter_fee_tier_research.py"
+      - "tests/test_lighter_fee_tier_research.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fee-tier-research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt
+      - name: Compile and regression tests
+        run: |
+          python -m compileall -q lighter_fee_tier_research.py
+          python -m unittest discover -s tests -p 'test_lighter_fee_tier_research.py' -v
+      - name: Run fixed fee-tier sensitivity study
+        run: |
+          END_TS=$(date -u +%s)
+          python lighter_fee_tier_research.py --days 400 --windows 12 --window-days 30 --max-markets 10 --balances 5,50,100 --end-timestamp "$END_TS" --replicates 10000 --block-length 2 --seed 20261102 --out lighter-fee-tier-results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lighter-fee-tier-sensitivity
+          path: lighter-fee-tier-results/
+          if-no-files-found: warn
+          retention-days: 30

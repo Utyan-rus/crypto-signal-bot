@@ -1,0 +1,6 @@
+{
+  "purpose": "One-time push trigger for the fixed prospective 120-day OOS evaluation. Update only after the preregistered OOS end and after the final hourly candle/funding checkpoint has been collected.",
+  "oos_end_utc": "2027-03-07T07:00:00Z",
+  "requested_at_utc": null,
+  "sequence": 0
+}
