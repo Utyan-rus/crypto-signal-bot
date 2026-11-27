@@ -10,7 +10,9 @@ on:
     branches: ["research/robust-backtest-audit"]
     paths:
       - "paper_forward_collector.py"
+      - "paper_forward_overlap_audit.py"
       - "tests/test_paper_forward_collector.py"
+      - "tests/test_paper_forward_overlap_audit.py"
       - ".github/workflows/paper-forward-collector.yml"
       - "paper-forward-data/collector-trigger.json"
   workflow_dispatch:
@@ -38,15 +40,20 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Run collector tests
         run: python -m unittest discover -s tests -p 'test_paper_forward_collector.py' -v
+      - name: Run overlap-audit regression tests
+        run: python -m unittest discover -s tests -p 'test_paper_forward_overlap_audit.py' -v
       - name: Collect newly closed hourly bars
         run: python paper_forward_collector.py --output-dir paper-forward-data --state paper-forward-data/state.json
-      - name: Upload immutable run snapshot
+      - name: Audit cross-strategy paper entries
+        run: python paper_forward_overlap_audit.py --input paper-forward-data/events.jsonl --out paper-forward-overlap-results
+      - name: Upload immutable run snapshot and overlap audit
         uses: actions/upload-artifact@v4
         with:
           name: paper-forward-${{ github.run_id }}
           path: |
             paper-forward-data/summary.json
             paper-forward-data/events.jsonl
+            paper-forward-overlap-results/
           if-no-files-found: error
           retention-days: 90
       - name: Persist append-only journal and checkpoint
