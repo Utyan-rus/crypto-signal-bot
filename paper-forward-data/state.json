@@ -1,6 +1,6 @@
 {
   "experiment_id": "prospective-120d-holdout-2026-11-07",
-  "last_run_utc": "2026-11-27T08:01:13Z",
+  "last_run_utc": "2026-11-27T08:16:36Z",
   "tracks": {
     "BNB|adaptive_regime_switch": {
       "balance": 50.0,
